@@ -5,6 +5,10 @@ from torch.utils.data import DataLoader
 from transformers import Trainer, TrainingArguments
 
 from leap_finetune.data_loading.length_grouping import get_length_grouped_sampler
+from leap_finetune.quantization.qat import (
+    finalize_qat_after_peft,
+    prepare_model_for_qat,
+)
 from leap_finetune.distribution.distributed_configs import (
     resolve_fsdp_cpu_offload,
     resolve_reshard_after_forward,
@@ -248,6 +252,7 @@ def moe_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
         model_name=model_name,
         train_config=train_config,
     )
+    prepare_model_for_qat(model, train_config, resume_from_checkpoint=resume_from)
     write_memory_trace_event("after_model_load", always=True)
     log_cuda_memory("after_load_model")
 
@@ -279,6 +284,7 @@ def moe_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
 
     if peft_config:
         model = apply_peft_to_model(model, peft_config)
+    finalize_qat_after_peft(model)
 
     # ==== 4. Apply FSDP2 ====
     # EP shards params only over the DP submesh so expert ownership stays local.

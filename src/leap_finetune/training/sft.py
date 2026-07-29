@@ -4,6 +4,10 @@ from transformers import Trainer, TrainingArguments
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
 from leap_finetune.training.default_configs.sft_configs import SFT_EXCLUDED_KEYS
+from leap_finetune.quantization.qat import (
+    finalize_qat_after_peft,
+    prepare_model_for_qat,
+)
 from leap_finetune.training.utils.worker_setup import (
     default_eval_batch_size,
     resolve_train_eval_datasets,
@@ -123,11 +127,13 @@ def sft_run(training_config: dict, train_dataset=None, eval_dataset=None) -> Non
         model_name=model_name,
         train_config=train_config,
     )
+    prepare_model_for_qat(model, train_config, resume_from_checkpoint=resume_from)
 
     if adapter_path:
         model = load_peft_adapter(model, adapter_path)
     elif peft_config:
         model = apply_peft_to_model(model, peft_config)
+    finalize_qat_after_peft(model)
 
     data_collator = build_sft_data_collator(tokenizer, train_config)
     trainer = LFMSFTTrainer(

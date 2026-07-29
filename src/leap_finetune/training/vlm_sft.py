@@ -20,6 +20,10 @@ from leap_finetune.evaluation import (
     create_vlm_benchmarks_from_config,
     make_eval_callback,
 )
+from leap_finetune.quantization.qat import (
+    finalize_qat_after_peft,
+    prepare_model_for_qat,
+)
 from leap_finetune.training.utils.logging import (
     finish_tracker,
     get_wandb_run_id,
@@ -185,6 +189,9 @@ def vlm_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
         max_image_tokens=max_image_tokens,
         do_image_splitting=do_image_splitting,
     )
+    prepare_model_for_qat(
+        model, train_config, resume_from_checkpoint=resume_from, is_vision=True
+    )
     if group_by_image_tiles:
         train_dataset = add_vlm_tile_counts(train_dataset, processor)
 
@@ -194,6 +201,7 @@ def vlm_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
         model = apply_peft_to_model(model, peft_config)
     if freeze_vision_encoder:
         freeze_vlm_modules(model, ["model.vision_tower"])
+    finalize_qat_after_peft(model)
 
     collate_fn = create_vlm_collate_fn(processor)
 
