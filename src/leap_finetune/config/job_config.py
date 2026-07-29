@@ -52,6 +52,34 @@ class RetrievalPrompts(BaseModel):
     negative: str = "document: "
 
 
+QATType = Literal[
+    "gguf_q4_0",
+    "gguf_q8_0",
+    "mlx_q4",
+    "mlx_q8",
+    "vllm_fp8",
+    "vllm_mxfp4",
+    "noise_q4",
+    "noise_q8",
+]
+
+
+class QATConfig(BaseModel):
+    """Quantization-aware training configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: QATType
+    quantize_reference: bool = True
+    target: Literal["auto", "cuda", "rocm_mi300"] | None = None
+
+    @model_validator(mode="after")
+    def _validate_target(self) -> QATConfig:
+        if self.target is not None and self.type != "vllm_fp8":
+            raise ValueError("training_config.qat.target is only valid for vllm_fp8")
+        return self
+
+
 class DatasetConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -125,6 +153,7 @@ class TrainingConfig(BaseModel):
     temperature: float | None = Field(default=None, gt=0)
     mini_batch_size: int | None = Field(default=None, gt=0)
     gather_across_devices: bool | None = None
+    qat: QATConfig | None = None
 
     def extends_name(self) -> str | None:
         return self.extends or self.base
@@ -169,11 +198,23 @@ class EvalSuiteConfig(BaseModel):
 class EvalBackendConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["hf", "vllm"] = "hf"
+    type: Literal["hf", "vllm", "llama_cpp"] = "hf"
     tensor_parallel_size: int = 1
     gpu_memory_utilization: float = 0.9
     dtype: str = "bfloat16"
     max_model_len: int | None = None
+    quantization: str | None = None
+    base_url: str | None = None
+    model_id: str | None = None
+    server_binary: str = "llama-server"
+    host: str = "127.0.0.1"
+    port: int = 8080
+    n_gpu_layers: int = 999
+    mmproj: str | None = None
+    server_args: list[str] = Field(default_factory=list)
+    startup_timeout: float = 300.0
+    request_timeout: float = 600.0
+    log_path: str | None = None
 
     @model_validator(mode="after")
     def _validate_backend(self) -> EvalBackendConfig:
@@ -181,6 +222,12 @@ class EvalBackendConfig(BaseModel):
             raise ValueError("backend.tensor_parallel_size must be >= 1")
         if self.gpu_memory_utilization <= 0 or self.gpu_memory_utilization > 1:
             raise ValueError("backend.gpu_memory_utilization must be in (0, 1]")
+        if not 1 <= self.port <= 65535:
+            raise ValueError("backend.port must be in [1, 65535]")
+        if self.startup_timeout <= 0:
+            raise ValueError("backend.startup_timeout must be > 0")
+        if self.request_timeout <= 0:
+            raise ValueError("backend.request_timeout must be > 0")
         return self
 
 
@@ -361,6 +408,24 @@ class JobConfig(BaseModel):
                         f"Config key `{key}` is only valid for training_type in "
                         f"('grpo', 'vlm_grpo'); got training_type={self.training_type!r}."
                     )
+        qat = self.training_config.qat
+        if (
+            qat is not None
+            and not qat.quantize_reference
+            and self.training_type not in ("dpo", "vlm_dpo", "moe_dpo")
+        ):
+            raise ValueError(
+                "training_config.qat.quantize_reference is only valid for DPO"
+            )
+        if (
+            qat is not None
+            and self.training_type in ("grpo", "vlm_grpo")
+            and bool(getattr(self.training_config, "use_vllm", False))
+        ):
+            raise ValueError(
+                "QAT GRPO requires training_config.use_vllm: false so rollout "
+                "generation and training forwards use the same fake-quantized model."
+            )
         return self
 
     @property

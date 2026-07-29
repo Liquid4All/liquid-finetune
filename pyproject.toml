@@ -44,6 +44,8 @@ rl-env = [
 leap-finetune = "leap_finetune:main"
 leap-export-manual-sharded-checkpoint = "leap_finetune.cli.export_manual_sharded_checkpoint:main"
 leap-export-gguf = "leap_finetune.cli.export_gguf:main"
+leap-qat-matrix = "leap_finetune.quantization.qat.matrix:main"
+leap-qat-report = "leap_finetune.quantization.qat.report:main"
 
 [build-system]
 requires = ["hatchling"]

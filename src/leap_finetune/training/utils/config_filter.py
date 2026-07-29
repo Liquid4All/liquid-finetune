@@ -20,6 +20,7 @@ MODEL_RUNTIME_EXCLUDED_KEYS = {
     "chat_template",
     "chat_template_path",
     "adapter_path",
+    "qat",
 }
 
 DISTRIBUTED_RUNTIME_EXCLUDED_KEYS = {
