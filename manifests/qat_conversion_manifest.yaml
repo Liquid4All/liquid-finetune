@@ -1,0 +1,49 @@
+version: 2
+checkpoint: /absolute/path/to/hf-checkpoint
+artifacts_root: /shared/path/qat-artifacts
+conversions:
+  gguf_q4_0:
+    platform: cpu_or_rocm
+    command: leap-export-gguf {checkpoint} --quant Q4_0 --output-dir {artifacts_root}/gguf_q4_0 --llama-cpp-dir {llama_cpp_dir}
+    evaluation_backend: llama_cpp
+  gguf_q8_0:
+    platform: cpu_or_rocm
+    command: leap-export-gguf {checkpoint} --quant Q8_0 --output-dir {artifacts_root}/gguf_q8_0
+    evaluation_backend: llama_cpp
+  mlx_q4:
+    platform: apple-silicon
+    command: mlx_lm.convert --hf-path {checkpoint} --mlx-path {artifacts_root}/mlx_q4 --quantize --q-bits 4 --q-group-size 32 --q-mode affine
+    status: pending_apple_hardware
+  mlx_q8:
+    platform: apple-silicon
+    command: mlx_lm.convert --hf-path {checkpoint} --mlx-path {artifacts_root}/mlx_q8 --quantize --q-bits 8 --q-group-size 32 --q-mode affine
+    status: pending_apple_hardware
+  vllm_fp8:
+    platform: rocm_mi3xx
+    command: vllm serve {checkpoint} --quantization fp8
+    evaluation_command: vllm serve {checkpoint} --quantization fp8
+    parity:
+      cuda:
+        activations: exact_dynamic_per_token_e4m3fn
+        weights: exact_per_tensor_e4m3fn
+      rocm_mi3xx:
+        activations: exact_dynamic_per_tensor_e4m3fnuz
+        weights: exact_per_tensor_e4m3fnuz
+      packed_moe_weights: exact_per_expert_matrix
+      status: exact_platform_native_online
+  vllm_mxfp4:
+    platform: rocm_mi355x
+    requires: pip install amd-quark; set QUARK_LLM_PTQ_SCRIPT
+    command: python manifests/convert_vllm.py {checkpoint} {artifacts_root}/vllm_mxfp4 --profile vllm_mxfp4 --tool quark
+    evaluation_command: vllm serve {artifacts_root}/vllm_mxfp4 --quantization quark
+    parity:
+      weights: exact_e2m1_e8m0_group32
+      activations: exact_dynamic_e2m1_e8m0_group32
+      runtime: native_mi355x
+      mi325x: unsupported_dense_w4a4_no_rocm_linear_kernel
+      status: pending_mi355x_hardware
+noise_evaluation:
+  noise_q4: [gguf_q4_0, mlx_q4, vllm_mxfp4]
+  noise_q8: [gguf_q8_0, mlx_q8, vllm_fp8]
+record:
+  required: [checkpoint_sha256, model_revision, dataset_revision, row_ids_sha256, seed, profile, conversion_tool_version, artifact_path, runtime_hardware, runtime_version, parity_status]

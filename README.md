@@ -1008,6 +1008,36 @@ uv run leap-export-gguf /path/to/adapter \
 For adapter K-quants, merge the adapter into the base model first, then export
 the merged checkpoint.
 
+### Quantization-aware training
+
+QAT is a shared model-preparation layer used by the existing runners; there are
+no QAT-specific entrypoints. Dense and vision models support SFT, DPO, and
+GRPO; MoE supports SFT and DPO.
+
+```yaml
+training_config:
+  qat:
+    type: gguf_q4_0
+```
+
+Profiles are `gguf_q4_0`, `gguf_q8_0`, `mlx_q4`, `mlx_q8`, `vllm_fp8`,
+`vllm_mxfp4`, `noise_q4`, and `noise_q8`. QAT starts on the first forward and
+keeps checkpoints as standard floating-point Hugging Face models with a
+`qat_config.json` sidecar. DPO quantizes its reference by default. QAT GRPO
+requires `use_vllm: false` so rollout generation and optimization share the
+same fake-quantized policy.
+
+For vLLM FP8, `target: cuda` or `target: rocm_mi300` selects deployment math
+independently of the training host; `auto` resolves once and is saved in the
+checkpoint metadata. Architecture targeting, profile math, exclusions, resume
+behavior, and hardware limitations are documented in the
+[QAT implementation notes](./src/leap_finetune/quantization/qat/README.md).
+
+Use [`job_configs/eval_gguf_example.yaml`](./job_configs/eval_gguf_example.yaml)
+for llama.cpp evaluation. Reproducible training, conversion, and ROCm execution
+recipes live under [`manifests/`](./manifests/); all large paths must point to
+persistent shared storage.
+
 ## Advanced Configuration
 
 Default base configs live in
