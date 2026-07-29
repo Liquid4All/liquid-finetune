@@ -17,3 +17,4 @@ backend:
   tensor_parallel_size: 1
   gpu_memory_utilization: 0.9
   dtype: "bfloat16"
+  # quantization: "fp8" # online FP8, or "quark" for Quark artifacts
