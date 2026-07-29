@@ -1,0 +1,12 @@
+# Template used by the post-training comparison driver. The checkpoint and
+# backend are replaced per artifact so all variants use these exact 100 rows.
+checkpoint: CHECKPOINT
+modality: text
+evals:
+  max_new_tokens: 128
+  benchmarks:
+    - name: smoltalk_constraints_test_100
+      path: /shared/path/qat-quality/datasets/smoltalk-smol-constraints-5feaf2fd/test_100.parquet
+      metric: rouge_l
+      limit: 100
+      max_new_tokens: 128
