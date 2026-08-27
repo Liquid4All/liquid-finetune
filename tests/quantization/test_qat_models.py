@@ -8,7 +8,15 @@ import pytest
 import torch
 
 from leap_finetune.quantization.qat import prepare_model_for_qat, set_qat_enabled
-from leap_finetune.quantization.qat.ops import mxfp4, q4_0, q4_0_ste, q8_0, q8_0_ste
+from leap_finetune.quantization.qat.ops import (
+    mxfp4,
+    mxfp8,
+    nvfp4,
+    q4_0,
+    q4_0_ste,
+    q8_0,
+    q8_0_ste,
+)
 
 
 LIQUID_LFM_ROOT = Path(os.environ.get("LIQUID_LFM_ROOT", Path.home() / "liquid_lfm"))
@@ -62,6 +70,32 @@ def test_mxfp4_matches_vllm_native_torch_reference():
     packed, scale = downcast_to_mxfp_torch(value, torch.uint8, axis=-1)
     reference = upcast_from_mxfp_torch(packed, scale, torch.float32, axis=-1)
     torch.testing.assert_close(mxfp4(value), reference, rtol=0, atol=0)
+
+
+def test_mxfp8_matches_transformer_engine_scale_contract():
+    torch.manual_seed(42)
+    value = torch.randn(2, 3, 64) * 100
+    blocks = value.reshape(-1, 32)
+    amax = blocks.abs().amax(dim=-1, keepdim=True)
+    exponent = torch.ceil(torch.log2(amax / 448.0)).clamp(-127, 127)
+    scale = torch.pow(2.0, exponent)
+    reference = (
+        (blocks / scale).clamp(-448, 448).to(torch.float8_e4m3fn).float() * scale
+    ).reshape_as(value)
+    torch.testing.assert_close(mxfp8(value), reference, rtol=0, atol=0)
+
+
+def test_nvfp4_matches_vllm_reference_quant_dequant():
+    pytest.importorskip("vllm")
+    from vllm.model_executor.layers.quantization.utils.nvfp4_emulation_utils import (
+        ref_nvfp4_quant_dequant,
+    )
+
+    torch.manual_seed(42)
+    value = torch.randn(6, 64, dtype=torch.float32) * 10
+    quant_multiplier = torch.tensor([2688.0 / value.abs().max()], dtype=torch.float32)
+    reference = ref_nvfp4_quant_dequant(value, quant_multiplier, block_size=16)
+    torch.testing.assert_close(nvfp4(value), reference, rtol=0, atol=0)
 
 
 def _dense_config():

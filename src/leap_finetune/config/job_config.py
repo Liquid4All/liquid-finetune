@@ -59,6 +59,8 @@ QATType = Literal[
     "mlx_q8",
     "vllm_fp8",
     "vllm_mxfp4",
+    "vllm_mxfp8",
+    "vllm_nvfp4",
     "noise_q4",
     "noise_q8",
 ]

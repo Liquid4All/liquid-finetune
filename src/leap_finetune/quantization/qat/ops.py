@@ -206,6 +206,88 @@ def mxfp4_ste(tensor: torch.Tensor) -> torch.Tensor:
     return _ste(tensor, mxfp4(tensor))
 
 
+def mxfp8(tensor: torch.Tensor, group_size: int = BLOCK_SIZE) -> torch.Tensor:
+    """MXFP8 E4M3 values with an E8M0 power-of-two scale per group."""
+    blocks, shape, padded_width = _block_view(tensor, group_size)
+    amax = blocks.abs().amax(dim=1, keepdim=True)
+    tiny = torch.tensor(torch.finfo(torch.float32).tiny, device=blocks.device)
+    # E8M0 scales round upward so the block amax fits in E4M3FN (max 448).
+    exponent = torch.ceil(torch.log2(torch.clamp(amax / 448.0, min=tiny)))
+    scale = torch.pow(2.0, exponent.clamp_(-127, 127))
+    scale = torch.where(amax != 0, scale, torch.ones_like(scale))
+    normalized = (blocks / scale).clamp(-448.0, 448.0)
+    quantized = normalized.to(_float8_dtype()).float() * scale
+    quantized = torch.where(amax != 0, quantized, blocks)
+    return _restore_blocks(quantized, tensor, shape, padded_width)
+
+
+def mxfp8_ste(tensor: torch.Tensor) -> torch.Tensor:
+    return _ste(tensor, mxfp8(tensor))
+
+
+def _e2m1_round_to_even(value: torch.Tensor) -> torch.Tensor:
+    """Round magnitudes to E2M1 using vLLM NVFP4's tie-to-even contract."""
+    magnitude = value.abs()
+    rounded = torch.zeros_like(magnitude)
+    rounded = torch.where((magnitude > 0.25) & (magnitude < 0.75), 0.5, rounded)
+    rounded = torch.where((magnitude >= 0.75) & (magnitude <= 1.25), 1.0, rounded)
+    rounded = torch.where((magnitude > 1.25) & (magnitude < 1.75), 1.5, rounded)
+    rounded = torch.where((magnitude >= 1.75) & (magnitude <= 2.5), 2.0, rounded)
+    rounded = torch.where((magnitude > 2.5) & (magnitude < 3.5), 3.0, rounded)
+    rounded = torch.where((magnitude >= 3.5) & (magnitude <= 5.0), 4.0, rounded)
+    rounded = torch.where(magnitude > 5.0, 6.0, rounded)
+    return rounded.copysign(value)
+
+
+def nvfp4(
+    tensor: torch.Tensor,
+    group_size: int = 16,
+    *,
+    per_expert_matrix: bool = False,
+) -> torch.Tensor:
+    """NVFP4 E2M1 with E4M3 group-16 and FP32 tensor-level scaling.
+
+    This is deterministic inference-format fake quantization. Transformer
+    Engine training may additionally apply stochastic rounding and an RHT.
+    """
+    blocks, shape, padded_width = _block_view(tensor, group_size)
+    value = tensor.float()
+    reduce_dims = (-2, -1) if per_expert_matrix and value.ndim >= 3 else None
+    tensor_amax = value.abs().amax(dim=reduce_dims, keepdim=reduce_dims is not None)
+    global_multiplier = torch.where(
+        tensor_amax != 0, 2688.0 / tensor_amax, torch.ones_like(tensor_amax)
+    )
+    if reduce_dims is None:
+        block_multiplier = global_multiplier
+    else:
+        rows_per_expert = math.prod(shape[1:-1]) * (padded_width // group_size)
+        block_multiplier = global_multiplier.reshape(-1, 1).repeat_interleave(
+            rows_per_expert, dim=0
+        )
+
+    block_amax = blocks.abs().amax(dim=1, keepdim=True)
+    encoded_scale = (block_multiplier * block_amax / 6.0).clamp(0.0, 448.0)
+    encoded_scale = encoded_scale.to(_float8_dtype()).float()
+    inverse_global = 1.0 / (
+        block_multiplier + (block_multiplier == 0).to(block_multiplier.dtype) * 1e8
+    )
+    divisor = encoded_scale * inverse_global
+    output_scale = 1.0 / (divisor + (divisor == 0).to(divisor.dtype) * 1e8)
+    normalized = (blocks * output_scale).clamp(-6.0, 6.0)
+    dequant_scale = encoded_scale / block_multiplier
+    dequantized = _e2m1_round_to_even(normalized) * dequant_scale
+    dequantized = torch.where(block_amax != 0, dequantized, blocks)
+    return _restore_blocks(dequantized, tensor, shape, padded_width)
+
+
+def nvfp4_weight_ste(tensor: torch.Tensor) -> torch.Tensor:
+    return _ste(tensor, nvfp4(tensor, per_expert_matrix=True))
+
+
+def nvfp4_activation_ste(tensor: torch.Tensor) -> torch.Tensor:
+    return _ste(tensor, nvfp4(tensor))
+
+
 def uniform_block_noise(
     tensor: torch.Tensor, *, bits: int, block_size: int = BLOCK_SIZE
 ) -> torch.Tensor:

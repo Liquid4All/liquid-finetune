@@ -28,6 +28,8 @@ def _convert_with_llmcompressor(checkpoint: str, output_dir: str, profile: str) 
     scheme = {
         "vllm_fp8": "FP8_DYNAMIC",
         "vllm_mxfp4": "MXFP4",
+        "vllm_mxfp8": "MXFP8",
+        "vllm_nvfp4": "NVFP4",
     }[profile]
     modifier = QuantizationModifier(
         targets="Linear",
@@ -59,10 +61,17 @@ def _convert_with_quark(
     num_calib_data: int,
 ) -> None:
     script = _resolve_quark_script(quark_script)
-    scheme = {
+    schemes = {
         "vllm_fp8": "ptpc_fp8",
         "vllm_mxfp4": "mxfp4",
-    }[profile]
+        "vllm_mxfp8": "mxfp8",
+    }
+    if profile not in schemes:
+        raise SystemExit(
+            f"AMD Quark conversion is not configured for {profile}; "
+            "use --tool llmcompressor on NVIDIA Blackwell"
+        )
+    scheme = schemes[profile]
     command = [
         sys.executable,
         str(script),
@@ -88,14 +97,20 @@ def main() -> None:
     parser.add_argument("output_dir")
     parser.add_argument(
         "--profile",
-        choices=("vllm_fp8", "vllm_mxfp4"),
+        choices=(
+            "vllm_fp8",
+            "vllm_mxfp4",
+            "vllm_mxfp8",
+            "vllm_nvfp4",
+        ),
         default="vllm_mxfp4",
     )
     parser.add_argument(
         "--tool",
         choices=("llmcompressor", "quark"),
         default=None,
-        help="Defaults to Quark for MXFP4 and llm-compressor for FP8.",
+        help="Defaults to Quark for MXFP4 and llm-compressor for FP8, MXFP8, "
+        "and NVFP4.",
     )
     parser.add_argument("--quark-script")
     parser.add_argument("--num-calib-data", type=int, default=32)

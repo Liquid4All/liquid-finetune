@@ -1021,9 +1021,8 @@ training_config:
 ```
 
 Profiles are `gguf_q4_0`, `gguf_q8_0`, `mlx_q4`, `mlx_q8`, `vllm_fp8`,
-`vllm_mxfp4`, `noise_q4`, and `noise_q8`. QAT starts on the first forward and
-keeps checkpoints as standard floating-point Hugging Face models with a
-`qat_config.json` sidecar. DPO quantizes its reference by default. QAT GRPO
+`vllm_mxfp4`, `vllm_mxfp8`, `vllm_nvfp4`, `noise_q4`, and `noise_q8`. QAT starts on the first forward and keeps checkpoints as standard Hugging Face
+models with a `qat_config.json` sidecar. DPO quantizes its reference by default. QAT GRPO
 requires `use_vllm: false` so rollout generation and optimization share the
 same fake-quantized policy.
 

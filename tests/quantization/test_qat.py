@@ -26,6 +26,10 @@ from leap_finetune.quantization.qat.ops import (
     fp8_e4m3_per_tensor_ste,
     fp8_e4m3_per_token_ste,
     mxfp4_ste,
+    mxfp8,
+    mxfp8_ste,
+    nvfp4,
+    nvfp4_activation_ste,
     q4_0,
     q4_0_ste,
     q8_0,
@@ -87,6 +91,8 @@ def test_bundled_gguf_maps_current_lfm2_dense_tensor_names(monkeypatch):
         fp8_e4m3_per_tensor_ste,
         fp8_e4m3_per_token_ste,
         mxfp4_ste,
+        mxfp8_ste,
+        nvfp4_activation_ste,
         lambda x: uniform_block_noise_ste(x, bits=4),
         lambda x: uniform_block_noise_ste(x, bits=8),
     ],
@@ -186,7 +192,14 @@ class _ToyVLM(nn.Module):
 
 @pytest.mark.parametrize(
     ("profile", "projector_quantized"),
-    [("gguf_q4_0", False), ("mlx_q4", True), ("vllm_fp8", True), ("noise_q4", True)],
+    [
+        ("gguf_q4_0", False),
+        ("mlx_q4", True),
+        ("vllm_fp8", True),
+        ("vllm_mxfp8", True),
+        ("vllm_nvfp4", True),
+        ("noise_q4", True),
+    ],
 )
 def test_vlm_targeting_never_quantizes_vision_tower(profile, projector_quantized):
     model = _ToyVLM()
@@ -218,10 +231,11 @@ class _ToyMoE(nn.Module):
         self.lm_head = nn.Linear(32, 32, bias=False)
 
 
-def test_moe_targets_packed_experts_but_not_router():
+@pytest.mark.parametrize("profile", ["gguf_q4_0", "vllm_mxfp8", "vllm_nvfp4"])
+def test_moe_targets_packed_experts_but_not_router(profile):
     model = _ToyMoE()
     keys_before = list(model.state_dict())
-    report = prepare_model_for_qat(model, {"qat": {"type": "gguf_q4_0"}})
+    report = prepare_model_for_qat(model, {"qat": {"type": profile}})
     assert report is not None
     assert report.expert_tensors == ["experts.gate_up_proj", "experts.down_proj"]
     assert "gate" in report.excluded
@@ -488,6 +502,48 @@ def test_mxfp4_matches_native_round_up_contract():
     # normalized 3.5 E2M1 tie upward to 4.
     assert quantized[0].item() == 8.0
     assert quantized[1].item() == 3.0
+
+
+def test_mxfp8_uses_e4m3_values_and_e8m0_group32_scales():
+    value = torch.zeros(64)
+    value[0] = 500.0
+    value[32] = 1.0
+    quantized = mxfp8(value)
+    first_scale = 2.0  # ceil(log2(500 / 448))
+    second_scale = 2.0**-8  # ceil(log2(1 / 448))
+    expected = value.clone()
+    expected[:32] = (value[:32] / first_scale).to(
+        torch.float8_e4m3fn
+    ).float() * first_scale
+    expected[32:] = (value[32:] / second_scale).to(
+        torch.float8_e4m3fn
+    ).float() * second_scale
+    torch.testing.assert_close(quantized, expected, rtol=0, atol=0)
+
+
+def test_nvfp4_matches_vllm_reference_scale_and_tie_contract():
+    value = torch.zeros(2, 16)
+    value[0, :8] = torch.tensor([0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0, 6.0])
+    value[1, 0] = 12.0
+    result = nvfp4(value)
+
+    global_multiplier = 2688.0 / value.abs().max()
+    blocks = value.reshape(-1, 16)
+    block_amax = blocks.abs().amax(dim=1, keepdim=True)
+    block_scale = (global_multiplier * block_amax / 6.0).clamp(0, 448)
+    block_scale = block_scale.to(torch.float8_e4m3fn).float()
+    scaled = (blocks * global_multiplier / block_scale.clamp_min(1e-30)).clamp(-6, 6)
+    reference = torch.zeros_like(scaled)
+    magnitude = scaled.abs()
+    reference = torch.where((magnitude > 0.25) & (magnitude < 0.75), 0.5, reference)
+    reference = torch.where((magnitude >= 0.75) & (magnitude <= 1.25), 1.0, reference)
+    reference = torch.where((magnitude > 1.25) & (magnitude < 1.75), 1.5, reference)
+    reference = torch.where((magnitude >= 1.75) & (magnitude <= 2.5), 2.0, reference)
+    reference = torch.where((magnitude > 2.5) & (magnitude < 3.5), 3.0, reference)
+    reference = torch.where((magnitude >= 3.5) & (magnitude <= 5.0), 4.0, reference)
+    reference = torch.where(magnitude > 5.0, 6.0, reference)
+    reference = reference.copysign(scaled) * block_scale / global_multiplier
+    torch.testing.assert_close(result, reference.reshape_as(value), rtol=0, atol=0)
 
 
 def test_grouped_profiles_report_incompatible_weights_instead_of_padding():
