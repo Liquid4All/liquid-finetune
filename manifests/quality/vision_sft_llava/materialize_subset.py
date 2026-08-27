@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize the immutable 10k/1k SmolTalk quality subsets."""
+"""Materialize the immutable 10k/1k vision-SFT quality subsets."""
 
 from __future__ import annotations
 
@@ -10,9 +10,8 @@ from pathlib import Path
 
 from datasets import load_dataset
 
-DATASET = "HuggingFaceTB/smoltalk"
-SUBSET = "all"
-REVISION = "5feaf2fd3ffca7c237fc38d1861bc30365d48ffa"
+DATASET = "HuggingFaceH4/llava-instruct-mix-vsft"
+REVISION = "4c04c8302cb25a9c7ee48d2dfda99308d432f87c"
 
 
 def _sha256(path: Path) -> str:
@@ -34,7 +33,6 @@ def main() -> None:
     for split, count in (("train", 10000), ("test", 1000)):
         dataset = load_dataset(
             DATASET,
-            SUBSET,
             revision=REVISION,
             split=f"{split}[:{count}]",
             cache_dir=str(args.cache_dir) if args.cache_dir else None,
@@ -51,7 +49,6 @@ def main() -> None:
 
     manifest = {
         "dataset": DATASET,
-        "subset": SUBSET,
         "revision": REVISION,
         "selection": "first rows of each published split",
         **records,

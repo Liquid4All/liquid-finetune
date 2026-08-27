@@ -1,12 +1,18 @@
 # Template used by the post-training comparison driver. The checkpoint and
-# backend are replaced per artifact so all variants use these exact 100 rows.
+# backend are replaced per artifact. IFEval is scored separately with its
+# official rule registry; do not substitute a generic string metric.
 checkpoint: CHECKPOINT
 modality: text
 evals:
-  max_new_tokens: 128
+  max_new_tokens: 512
   benchmarks:
-    - name: smoltalk_constraints_test_100
-      path: /shared/path/qat-quality/datasets/smoltalk-smol-constraints-5feaf2fd/test_100.parquet
-      metric: rouge_l
-      limit: 100
-      max_new_tokens: 128
+    - name: gsm8k_250
+      path: /shared/path/qat-quality/evals/gsm8k_250.parquet
+      metric: gsm8k
+      limit: 250
+      max_new_tokens: 512
+    - name: mmlu_balanced_500
+      path: /shared/path/qat-quality/evals/mmlu_balanced_500.parquet
+      metric: mcq_gen
+      limit: 500
+      max_new_tokens: 8
