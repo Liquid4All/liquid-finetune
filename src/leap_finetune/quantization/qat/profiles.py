@@ -53,12 +53,23 @@ PROFILES: dict[str, QATProfile] = {
     "vllm_mxfp4": QATProfile(
         "vllm_mxfp4", ops.mxfp4_ste, ops.mxfp4_ste, True, ("vllm_mxfp4",), 32
     ),
+    "vllm_mxfp8": QATProfile(
+        "vllm_mxfp8", ops.mxfp8_ste, ops.mxfp8_ste, True, ("vllm_mxfp8",), 32
+    ),
+    "vllm_nvfp4": QATProfile(
+        "vllm_nvfp4",
+        ops.nvfp4_weight_ste,
+        ops.nvfp4_activation_ste,
+        True,
+        ("vllm_nvfp4",),
+        16,
+    ),
     "noise_q4": QATProfile(
         "noise_q4",
         lambda x: ops.uniform_block_noise_ste(x, bits=4),
         lambda x: ops.uniform_block_noise_ste(x, bits=4),
         True,
-        ("gguf_q4_0", "mlx_q4", "vllm_mxfp4"),
+        ("gguf_q4_0", "mlx_q4", "vllm_mxfp4", "vllm_nvfp4"),
         32,
     ),
     "noise_q8": QATProfile(
@@ -66,7 +77,7 @@ PROFILES: dict[str, QATProfile] = {
         lambda x: ops.uniform_block_noise_ste(x, bits=8),
         lambda x: ops.uniform_block_noise_ste(x, bits=8),
         True,
-        ("gguf_q8_0", "mlx_q8", "vllm_fp8"),
+        ("gguf_q8_0", "mlx_q8", "vllm_fp8", "vllm_mxfp8"),
         32,
     ),
 }
