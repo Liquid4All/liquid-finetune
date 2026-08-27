@@ -11,7 +11,7 @@ from pathlib import Path
 from datasets import load_dataset
 
 DATASET = "HuggingFaceTB/smoltalk"
-SUBSET = "all"
+SUBSET = "smol-constraints"
 REVISION = "5feaf2fd3ffca7c237fc38d1861bc30365d48ffa"
 
 

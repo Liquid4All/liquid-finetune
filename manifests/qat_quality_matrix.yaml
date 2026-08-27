@@ -24,8 +24,8 @@ runs:
       training_type: sft
       dataset:
         # Produced by quality/dense_sft_smoltalk/materialize_subset.py.
-        train_path: /shared/path/qat-quality/datasets/smoltalk-all/train_10000.parquet
-        val_path: /shared/path/qat-quality/datasets/smoltalk-all/test_1000.parquet
+        train_path: /shared/path/qat-quality/datasets/smoltalk-smol-constraints/train_10000.parquet
+        val_path: /shared/path/qat-quality/datasets/smoltalk-smol-constraints/test_1000.parquet
         type: sft
       training_config:
         num_train_epochs: 1
@@ -87,7 +87,7 @@ runs:
     config:
       model_name: LiquidAI/LFM2-8B-A1B
       training_type: moe_sft
-      dataset: {path: HuggingFaceTB/smoltalk, type: sft, subset: all, train_split: "train[:10000]", val_split: "test[:1000]"}
+      dataset: {path: HuggingFaceTB/smoltalk, type: sft, subset: smol-constraints, train_split: "train[:10000]", val_split: "test[:1000]"}
       training_config: {extends: MOE_SFT, num_train_epochs: 1, eval_strategy: epoch}
       peft_config: {extends: MOE_LORA, use_peft: true}
   - id: moe_dpo
