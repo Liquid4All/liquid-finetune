@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize pinned 100-row GSM8K and balanced MMLU eval subsets."""
+"""Materialize the pinned 250/250/500 public text quality suite."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from pathlib import Path
 from datasets import Dataset, load_dataset
 
 GSM8K_REVISION = "740312add88f781978c0658806c59bc2815b9866"
+IFEVAL_REVISION = "966cd89545d6b6acfd7638bc708b98261ca58e84"
 MMLU_REVISION = "c30699e8356da336a370243923dbaf21066bb9fe"
 LETTERS = "ABCD"
 
@@ -29,7 +30,7 @@ def gsm8k_rows(cache_dir: Path | None) -> list[dict]:
         "openai/gsm8k",
         "main",
         revision=GSM8K_REVISION,
-        split="test[:100]",
+        split="test[:250]",
         cache_dir=str(cache_dir) if cache_dir else None,
     )
     return [
@@ -50,6 +51,16 @@ def gsm8k_rows(cache_dir: Path | None) -> list[dict]:
     ]
 
 
+def ifeval_rows(cache_dir: Path | None) -> list[dict]:
+    source = load_dataset(
+        "google/IFEval",
+        revision=IFEVAL_REVISION,
+        split="train[:250]",
+        cache_dir=str(cache_dir) if cache_dir else None,
+    )
+    return [{**row, "source_row_id": index} for index, row in enumerate(source)]
+
+
 def mmlu_rows(cache_dir: Path | None) -> list[dict]:
     source = load_dataset(
         "cais/mmlu",
@@ -64,10 +75,10 @@ def mmlu_rows(cache_dir: Path | None) -> list[dict]:
 
     selected = []
     subjects = sorted(by_subject)
-    while len(selected) < 100:
+    while len(selected) < 500:
         made_progress = False
         for subject in subjects:
-            if by_subject[subject] and len(selected) < 100:
+            if by_subject[subject] and len(selected) < 500:
                 selected.append(by_subject[subject].popleft())
                 made_progress = True
         if not made_progress:
@@ -101,7 +112,7 @@ def mmlu_rows(cache_dir: Path | None) -> list[dict]:
 
 
 def write_subset(output_dir: Path, name: str, rows: list[dict]) -> dict:
-    artifact = output_dir / f"{name}_100.parquet"
+    artifact = output_dir / f"{name}_{len(rows)}.parquet"
     Dataset.from_list(rows).to_parquet(artifact)
     return {
         "artifact": str(artifact.resolve()),
@@ -124,15 +135,23 @@ def main() -> None:
             "subset": "main",
             "split": "test",
             "revision": GSM8K_REVISION,
-            "selection": "first 100 published rows",
+            "selection": "first 250 published rows",
             **write_subset(args.output_dir, "gsm8k", gsm8k_rows(args.cache_dir)),
+        },
+        "ifeval": {
+            "dataset": "google/IFEval",
+            "split": "train",
+            "revision": IFEVAL_REVISION,
+            "selection": "first 250 published rows",
+            "scorer": "official IFEval strict and loose instruction accuracy",
+            **write_subset(args.output_dir, "ifeval", ifeval_rows(args.cache_dir)),
         },
         "mmlu": {
             "dataset": "cais/mmlu",
             "subset": "all",
             "split": "test",
             "revision": MMLU_REVISION,
-            "selection": "subject-sorted round robin until 100 rows",
+            "selection": "subject-sorted round robin until 500 rows",
             **write_subset(args.output_dir, "mmlu_balanced", mmlu_rows(args.cache_dir)),
         },
     }
