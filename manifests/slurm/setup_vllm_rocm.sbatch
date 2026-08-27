@@ -33,11 +33,26 @@ uv pip install --python "$ROCM_VENV/bin/python" \
     "huggingface_hub>=1.0" \
     "ray==2.51.1" \
     "numpy<2.5"
+uv pip install --python "$ROCM_VENV/bin/python" \
+    "trl==1.2.0" \
+    "deepspeed>=0.17.1" \
+    "wandb>=0.22.3" \
+    "mpi4py>=4.1.0" \
+    "turm>=0.13.0" \
+    "trackio>=0.3" \
+    "liger-kernel>=0.6.2"
 uv pip install --python "$ROCM_VENV/bin/python" --no-deps -e "$REPO_ROOT"
 
 "$ROCM_VENV/bin/python" - <<'PY'
+import importlib.util
+
 import torch
 import vllm
+
+required = ("accelerate", "datasets", "deepspeed", "peft", "trl", "wandb")
+missing = [name for name in required if importlib.util.find_spec(name) is None]
+if missing:
+    raise SystemExit(f"missing training dependencies: {missing}")
 
 print("torch", torch.__version__)
 print("hip", torch.version.hip)
