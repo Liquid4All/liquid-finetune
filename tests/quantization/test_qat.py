@@ -460,6 +460,7 @@ def test_quality_report_keeps_pending_cells_and_computes_deltas(tmp_path):
             "training_type": "sft",
             "profile": "gguf_q4_0",
             "deployment_format": "gguf_q4_0",
+            "metric": "accuracy",
             "bf16_score": 0.8,
             "ptq_score": 0.6,
             "qat_score": 0.7,
@@ -489,7 +490,11 @@ def test_quality_report_keeps_pending_cells_and_computes_deltas(tmp_path):
     assert lower_payload["qat_vs_ptq_delta"] == pytest.approx(1.0)
     assert lower_payload["ptq_degradation"] == pytest.approx(2.0)
     assert lower_payload["qat_degradation"] == pytest.approx(1.0)
-    assert "pending" in paths["markdown"].read_text(encoding="utf-8")
+    markdown = paths["markdown"].read_text(encoding="utf-8")
+    assert "| metric |" in markdown
+    assert "accuracy" in markdown
+    assert "| 0.8 | 0.6 | 0.7 | 0.1 |" in markdown
+    assert "pending" in markdown
     assert paths["csv"].is_file()
 
 
