@@ -32,14 +32,19 @@ def _ste(original: torch.Tensor, quantized: torch.Tensor) -> torch.Tensor:
 
 
 def q4_0(tensor: torch.Tensor, block_size: int = BLOCK_SIZE) -> torch.Tensor:
-    """llama.cpp Q4_0 dequantization, including fp16-rounded scales."""
+    """Simulate native llama.cpp Q4_0 quantization and dequantization."""
     blocks, shape, padded_width = _block_view(tensor, block_size)
     max_indices = blocks.abs().argmax(dim=1, keepdim=True)
     signed_max = blocks.gather(1, max_indices)
-    scale = (signed_max / -8.0).half().float()
+    # ggml chooses the integer codes with the FP32 scale, then stores that
+    # scale as FP16. Dequantization therefore uses the rounded stored scale.
+    scale = signed_max / -8.0
     inverse = torch.where(scale != 0, scale.reciprocal(), torch.zeros_like(scale))
     quants = (blocks * inverse + 8.5).to(torch.int32).clamp_(0, 15)
-    return _restore_blocks((quants.float() - 8.0) * scale, tensor, shape, padded_width)
+    stored_scale = scale.half().float()
+    return _restore_blocks(
+        (quants.float() - 8.0) * stored_scale, tensor, shape, padded_width
+    )
 
 
 def q4_0_ste(tensor: torch.Tensor) -> torch.Tensor:
@@ -47,12 +52,16 @@ def q4_0_ste(tensor: torch.Tensor) -> torch.Tensor:
 
 
 def q8_0(tensor: torch.Tensor, block_size: int = BLOCK_SIZE) -> torch.Tensor:
-    """llama.cpp Q8_0 dequantization with fp16-rounded block scales."""
+    """Simulate native llama.cpp Q8_0 quantization and dequantization."""
     blocks, shape, padded_width = _block_view(tensor, block_size)
-    scale = (blocks.abs().amax(dim=1, keepdim=True) / 127.0).half().float()
+    scale = blocks.abs().amax(dim=1, keepdim=True) / 127.0
     inverse = torch.where(scale != 0, scale.reciprocal(), torch.zeros_like(scale))
-    quants = (blocks * inverse).round().clamp_(-128, 127)
-    return _restore_blocks(quants * scale, tensor, shape, padded_width)
+    scaled = blocks * inverse
+    # ggml's roundf rounds exact half-way values away from zero; torch.round
+    # uses ties-to-even.
+    quants = scaled.abs().add(0.5).floor().copysign(scaled).clamp_(-128, 127)
+    stored_scale = scale.half().float()
+    return _restore_blocks(quants * stored_scale, tensor, shape, padded_width)
 
 
 def q8_0_ste(tensor: torch.Tensor) -> torch.Tensor:
