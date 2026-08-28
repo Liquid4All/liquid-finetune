@@ -51,7 +51,11 @@ runs:
     config:
       model_name: LiquidAI/LFM2.5-1.2B-Instruct
       training_type: dpo
-      dataset: {path: mlabonne/orpo-dpo-mix-40k, type: dpo, subset: default, train_split: "train[:10000]", val_split: "train[10000:11000]"}
+      dataset:
+        # Produced by quality/dense_dpo_orpo/materialize_subset.py.
+        train_path: /shared/path/qat-quality/datasets/orpo-dpo-mix-40k/train_10000.parquet
+        val_path: /shared/path/qat-quality/datasets/orpo-dpo-mix-40k/eval_1000.parquet
+        type: dpo
       training_config: {extends: DEFAULT_DPO, num_train_epochs: 1, eval_strategy: epoch}
       peft_config: {extends: DEFAULT_LORA, use_peft: true}
   - id: dense_grpo
@@ -94,7 +98,10 @@ runs:
     config:
       model_name: LiquidAI/LFM2-8B-A1B
       training_type: moe_dpo
-      dataset: {path: mlabonne/orpo-dpo-mix-40k, type: dpo, subset: default, train_split: "train[:10000]", val_split: "train[10000:11000]"}
+      dataset:
+        train_path: /shared/path/qat-quality/datasets/orpo-dpo-mix-40k/train_10000.parquet
+        val_path: /shared/path/qat-quality/datasets/orpo-dpo-mix-40k/eval_1000.parquet
+        type: dpo
       training_config: {extends: MOE_DPO, num_train_epochs: 1, eval_strategy: epoch}
       peft_config: {extends: MOE_LORA, use_peft: true}
 

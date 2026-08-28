@@ -62,8 +62,9 @@ leap-qat-matrix manifests/qat_quality_matrix.yaml -o generated_qat_jobs
 Run any generated config with `leap-finetune`. Each SFT, DPO, and GRPO row is
 independent: it starts from its declared model and never consumes another
 trainer's checkpoint. The manifest fixes seed 42, 10,000 training examples,
-1,000 validation examples, and public evaluation subsets. Record the resolved
-dataset revision and selected row IDs when launching a run.
+1,000 validation examples, and public evaluation subsets. Pinned subset
+materializers under `manifests/quality/` record immutable dataset revisions,
+selected row IDs, and artifact hashes for SFT, DPO, GRPO, and vision SFT.
 
 Hardware-specific conversion commands are in
 `manifests/qat_conversion_manifest.yaml`. The native matrix uses H100 for FP8,
