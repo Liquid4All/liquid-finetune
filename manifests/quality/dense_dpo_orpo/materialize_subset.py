@@ -8,7 +8,9 @@ import hashlib
 import json
 from pathlib import Path
 
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
+
+from leap_finetune.data_loading.validate_dataset_format import get_row_filter
 
 DATASET = "mlabonne/orpo-dpo-mix-40k"
 SUBSET = "default"
@@ -36,13 +38,24 @@ def main() -> None:
         DATASET,
         SUBSET,
         revision=REVISION,
-        split=f"train[:{TRAIN_ROWS + EVAL_ROWS}]",
+        split="train",
         cache_dir=str(args.cache_dir) if args.cache_dir else None,
     )
-    source = source.add_column("source_row_id", list(range(len(source))))
+    is_valid = get_row_filter("dpo", model_family="lfm25")
+    selected = []
+    for source_row_id, row in enumerate(source):
+        if not is_valid(row):
+            continue
+        selected.append({**row, "source_row_id": source_row_id})
+        if len(selected) == TRAIN_ROWS + EVAL_ROWS:
+            break
+    if len(selected) != TRAIN_ROWS + EVAL_ROWS:
+        raise RuntimeError(
+            f"Expected {TRAIN_ROWS + EVAL_ROWS} valid rows, found {len(selected)}"
+        )
     splits = {
-        "train": source.select(range(TRAIN_ROWS)),
-        "eval": source.select(range(TRAIN_ROWS, TRAIN_ROWS + EVAL_ROWS)),
+        "train": Dataset.from_list(selected[:TRAIN_ROWS]),
+        "eval": Dataset.from_list(selected[TRAIN_ROWS:]),
     }
     records = {}
     for split, dataset in splits.items():
@@ -59,7 +72,7 @@ def main() -> None:
         "dataset": DATASET,
         "subset": SUBSET,
         "revision": REVISION,
-        "selection": "published train rows 0:10000 and 10000:11000",
+        "selection": "first 11000 rows passing leap's LFM2.5 DPO filter",
         **records,
     }
     (args.output_dir / "subset_manifest.json").write_text(
