@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 
+import numpy as np
 import pytest
 import torch
 import torch.nn as nn
@@ -39,27 +40,46 @@ from leap_finetune.quantization.qat.ops import (
 )
 
 
-def _liquid_q4_reference(value: torch.Tensor) -> torch.Tensor:
+def _native_q4_reference(value: torch.Tensor) -> torch.Tensor:
     blocks = value.reshape(-1, 32).float()
     index = blocks.abs().argmax(dim=1, keepdim=True)
-    scale = (blocks.gather(1, index) / -8.0).half().float()
+    scale = blocks.gather(1, index) / -8.0
     inverse = torch.where(scale != 0, scale.reciprocal(), torch.zeros_like(scale))
     quantized = (blocks * inverse + 8.5).to(torch.int32).clamp(0, 15)
-    return ((quantized.float() - 8.0) * scale).to(value.dtype).reshape(value.shape)
+    stored_scale = scale.half().float()
+    return (
+        ((quantized.float() - 8.0) * stored_scale).to(value.dtype).reshape(value.shape)
+    )
 
 
-def _liquid_q8_reference(value: torch.Tensor) -> torch.Tensor:
+def _native_q8_reference(value: torch.Tensor) -> torch.Tensor:
     blocks = value.reshape(-1, 32).float()
-    scale = (blocks.abs().amax(dim=1, keepdim=True) / 127.0).half().float()
+    scale = blocks.abs().amax(dim=1, keepdim=True) / 127.0
     inverse = torch.where(scale != 0, scale.reciprocal(), torch.zeros_like(scale))
-    quantized = (blocks * inverse).round().clamp(-128, 127).to(torch.int8)
-    return (quantized.float() * scale).to(value.dtype).reshape(value.shape)
+    scaled = blocks * inverse
+    quantized = scaled.abs().add(0.5).floor().copysign(scaled).clamp(-128, 127)
+    stored_scale = scale.half().float()
+    return (quantized * stored_scale).to(value.dtype).reshape(value.shape)
 
 
-def test_gguf_kernels_match_liquid_lfm_reference():
+def test_gguf_kernels_match_native_equations():
     value = torch.linspace(-5.0, 4.0, 64, dtype=torch.bfloat16).reshape(2, 32)
-    torch.testing.assert_close(q4_0(value), _liquid_q4_reference(value))
-    torch.testing.assert_close(q8_0(value), _liquid_q8_reference(value))
+    torch.testing.assert_close(q4_0(value), _native_q4_reference(value))
+    torch.testing.assert_close(q8_0(value), _native_q8_reference(value))
+
+
+@pytest.mark.parametrize(("qtype_name", "quantizer"), [("Q4_0", q4_0), ("Q8_0", q8_0)])
+def test_gguf_kernels_match_bundled_native_reference(
+    monkeypatch, qtype_name, quantizer
+):
+    monkeypatch.syspath_prepend(str(GGUF_DIR / "gguf-py"))
+    gguf = importlib.import_module("gguf")
+    generator = np.random.default_rng(42)
+    value = generator.normal(size=(1000, 32)).astype(np.float32)
+    qtype = getattr(gguf.GGMLQuantizationType, qtype_name)
+    reference = gguf.dequantize(gguf.quantize(value, qtype), qtype)
+    actual = quantizer(torch.from_numpy(value)).numpy()
+    np.testing.assert_array_equal(actual, reference)
 
 
 def test_bundled_gguf_maps_current_lfm2_dense_tensor_names(monkeypatch):
@@ -125,6 +145,15 @@ class _DenseModel(nn.Module):
 
     def forward(self, value):
         return self.lm_head(self.proj(value))
+
+
+def test_gguf_linear_injection_quantizes_input_and_weight_at_the_matmul():
+    model = _DenseModel()
+    value = torch.randn(2, 3, 32)
+    weight = model.proj.weight.detach().clone()
+    prepare_model_for_qat(model, {"qat": {"type": "gguf_q4_0"}})
+    expected = F.linear(q8_0(value), q4_0(weight))
+    torch.testing.assert_close(model.proj(value), expected)
 
 
 @pytest.mark.parametrize("profile_name", sorted(PROFILES))

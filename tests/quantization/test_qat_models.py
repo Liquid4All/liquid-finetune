@@ -12,9 +12,7 @@ from leap_finetune.quantization.qat.ops import (
     mxfp4,
     mxfp8,
     nvfp4,
-    q4_0,
     q4_0_ste,
-    q8_0,
     q8_0_ste,
 )
 
@@ -36,13 +34,10 @@ def _load_liquid_lfm_qat():
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
-def test_gguf_forward_and_ste_gradients_match_liquid_lfm(dtype):
+def test_gguf_ste_gradients_match_liquid_lfm(dtype):
     reference = _load_liquid_lfm_qat()
     value = torch.randn(3, 64, dtype=dtype)
     value[:, 0] = 0
-
-    torch.testing.assert_close(q4_0(value), reference.fake_quantize_q4_0(value))
-    torch.testing.assert_close(q8_0(value), reference.fake_quantize_q8_0(value))
 
     coefficient = torch.randn_like(value)
     leap_value = value.detach().clone().requires_grad_()
