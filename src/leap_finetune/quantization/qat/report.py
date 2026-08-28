@@ -54,6 +54,14 @@ def enrich_result(row: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _format_markdown_value(value: Any) -> str:
+    if value is None:
+        return "pending"
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    return str(value)
+
+
 def write_quality_report(
     rows: list[dict[str, Any]], output_dir: str | Path
 ) -> dict[str, Path]:
@@ -80,6 +88,7 @@ def write_quality_report(
         "training_type",
         "profile",
         "deployment_format",
+        "metric",
         "bf16_score",
         "ptq_score",
         "qat_score",
@@ -96,8 +105,7 @@ def write_quality_report(
         lines.append(
             "| "
             + " | ".join(
-                str(row.get(column, "")) if row.get(column) is not None else "pending"
-                for column in columns
+                _format_markdown_value(row.get(column, "")) for column in columns
             )
             + " |"
         )
