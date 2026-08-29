@@ -82,6 +82,33 @@ def test_gguf_kernels_match_bundled_native_reference(
     np.testing.assert_array_equal(actual, reference)
 
 
+@pytest.mark.parametrize(
+    ("weight_qtype_name", "weight_quantizer"),
+    [("Q4_0", q4_0), ("Q8_0", q8_0)],
+)
+def test_gguf_fake_quantized_linear_matches_bundled_native_dequantized_matmul(
+    monkeypatch, weight_qtype_name, weight_quantizer
+):
+    """Check the composed W4A8/W8A8 layer contract, not just each tensor."""
+    monkeypatch.syspath_prepend(str(GGUF_DIR / "gguf-py"))
+    gguf = importlib.import_module("gguf")
+    generator = np.random.default_rng(42)
+    activation = generator.normal(size=(7, 64)).astype(np.float32)
+    weight = generator.normal(size=(48, 64)).astype(np.float32)
+
+    q8_type = gguf.GGMLQuantizationType.Q8_0
+    weight_type = getattr(gguf.GGMLQuantizationType, weight_qtype_name)
+    native_activation = gguf.dequantize(gguf.quantize(activation, q8_type), q8_type)
+    native_weight = gguf.dequantize(gguf.quantize(weight, weight_type), weight_type)
+    expected = native_activation @ native_weight.T
+
+    actual = F.linear(
+        q8_0(torch.from_numpy(activation)),
+        weight_quantizer(torch.from_numpy(weight)),
+    ).numpy()
+    np.testing.assert_allclose(actual, expected, rtol=2e-6, atol=2e-5)
+
+
 def test_bundled_gguf_maps_current_lfm2_dense_tensor_names(monkeypatch):
     monkeypatch.syspath_prepend(str(GGUF_DIR / "gguf-py"))
     gguf = importlib.import_module("gguf")
