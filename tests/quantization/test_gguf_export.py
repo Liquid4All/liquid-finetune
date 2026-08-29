@@ -49,9 +49,7 @@ def test_q8_embedding_override_uses_llama_quantize(monkeypatch, tmp_path):
         return output
 
     def fake_quantize(source, output, quant, binary, token_embedding_type=None):
-        quantizations.append(
-            (source, output, quant, binary, token_embedding_type)
-        )
+        quantizations.append((source, output, quant, binary, token_embedding_type))
         output.write_bytes(b"q8")
         return output
 
