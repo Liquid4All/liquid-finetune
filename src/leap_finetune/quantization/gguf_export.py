@@ -145,8 +145,12 @@ def quantize_gguf(
     output_gguf: pathlib.Path,
     quant_type: str,
     quantize_bin: pathlib.Path,
+    token_embedding_type: str | None = None,
 ) -> pathlib.Path:
-    cmd = [str(quantize_bin), str(input_gguf), str(output_gguf), quant_type]
+    cmd = [str(quantize_bin)]
+    if token_embedding_type is not None:
+        cmd.extend(["--token-embedding-type", token_embedding_type.lower()])
+    cmd.extend([str(input_gguf), str(output_gguf), quant_type])
     _run_subprocess(cmd, f"Quantizing to {quant_type}")
     logger.info("Created %s (%.2f GB)", output_gguf, output_gguf.stat().st_size / 1e9)
     return output_gguf
@@ -158,6 +162,7 @@ def export_gguf(
     output_dir: pathlib.Path,
     base_model_path: str | None = None,
     llama_cpp_dir: str | None = None,
+    token_embedding_type: str | None = None,
 ) -> list[pathlib.Path]:
     model_name = model_path.name
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -183,8 +188,14 @@ def export_gguf(
         return results
 
     # === Full model export ===
-    direct = [q for q in quant_types if q in DIRECT_QUANTS]
+    direct = [
+        q
+        for q in quant_types
+        if q in DIRECT_QUANTS and not (q == "Q8_0" and token_embedding_type is not None)
+    ]
     needs_quantize = [q for q in quant_types if q in QUANTIZE_QUANTS]
+    if "Q8_0" in quant_types and token_embedding_type is not None:
+        needs_quantize.append("Q8_0")
 
     # Direct quants (F16, BF16, F32, Q8_0) — single step via bundled script
     for quant in direct:
@@ -205,7 +216,13 @@ def export_gguf(
 
         for quant in needs_quantize:
             out_path = output_dir / f"{model_name}-{quant}.gguf"
-            quantize_gguf(f16_path, out_path, quant, quantize_bin)
+            quantize_gguf(
+                f16_path,
+                out_path,
+                quant,
+                quantize_bin,
+                token_embedding_type=token_embedding_type,
+            )
             results.append(out_path)
 
         # Clean up intermediate F16 if it wasn't explicitly requested

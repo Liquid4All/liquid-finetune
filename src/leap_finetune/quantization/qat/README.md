@@ -50,6 +50,14 @@ the profile, and resume fails if it does not match the requested profile.
 Loading without a `qat:` training option produces the normal floating-point
 model.
 
+GGUF QAT leaves tied token embeddings/output heads floating point. Preserve that
+contract during Q4_0/Q8_0 export:
+
+```bash
+leap-export-gguf CHECKPOINT --quant Q4_0 --token-embedding-type F16 \
+  --llama-cpp-dir LLAMA_CPP_DIR
+```
+
 ## Quality matrix
 
 Expand the baseline plus ten QAT profiles for every supported model/trainer

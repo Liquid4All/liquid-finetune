@@ -4,11 +4,11 @@ artifacts_root: /shared/path/qat-artifacts
 conversions:
   gguf_q4_0:
     platform: cpu_or_rocm
-    command: leap-export-gguf {checkpoint} --quant Q4_0 --output-dir {artifacts_root}/gguf_q4_0 --llama-cpp-dir {llama_cpp_dir}
+    command: leap-export-gguf {checkpoint} --quant Q4_0 --token-embedding-type F16 --output-dir {artifacts_root}/gguf_q4_0 --llama-cpp-dir {llama_cpp_dir}
     evaluation_backend: llama_cpp
   gguf_q8_0:
     platform: cpu_or_rocm
-    command: leap-export-gguf {checkpoint} --quant Q8_0 --output-dir {artifacts_root}/gguf_q8_0
+    command: leap-export-gguf {checkpoint} --quant Q8_0 --token-embedding-type F16 --output-dir {artifacts_root}/gguf_q8_0 --llama-cpp-dir {llama_cpp_dir}
     evaluation_backend: llama_cpp
   mlx_q4:
     platform: apple-silicon
