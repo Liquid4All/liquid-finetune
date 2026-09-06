@@ -186,7 +186,7 @@ def vlm_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
         do_image_splitting=do_image_splitting,
     )
     prepare_model_for_qat(
-        model, train_config, resume_from_checkpoint=resume_from, is_vision=True
+        model, train_config, is_vlm=True, resume_from_checkpoint=resume_from
     )
     if group_by_image_tiles:
         train_dataset = add_vlm_tile_counts(train_dataset, processor)
