@@ -4,7 +4,7 @@ import json
 import math
 from typing import Sequence
 
-from leap_finetune.rl.rewards import Recipe
+from liquid_finetune.rl.rewards import Recipe
 
 
 # === VLM grounding box rewards ===

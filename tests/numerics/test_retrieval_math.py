@@ -2,15 +2,15 @@ from types import SimpleNamespace
 
 from datasets import Dataset
 
-from leap_finetune.checkpointing.callback import LeapCheckpointCallback
-from leap_finetune.training.retrieval_utils import (
+from liquid_finetune.checkpointing.callback import LiquidCheckpointCallback
+from liquid_finetune.training.retrieval_utils import (
     align_retrieval_train_shard,
     build_ir_evaluation_data,
 )
 
 
 def test_retrieval_worker_aligns_distributed_shards(monkeypatch):
-    import leap_finetune.training.retrieval_utils as retrieval_utils
+    import liquid_finetune.training.retrieval_utils as retrieval_utils
 
     dataset = Dataset.from_list(
         [{"query": str(index), "positive": "p"} for index in range(9)]
@@ -54,7 +54,7 @@ def test_retrieval_improvement_metrics_reports_delta():
             {"eval_retrieval_cosine_accuracy": 0.75},
         ]
     )
-    metrics = LeapCheckpointCallback._retrieval_improvement_metrics(state)
+    metrics = LiquidCheckpointCallback._retrieval_improvement_metrics(state)
     assert metrics["retrieval/baseline/retrieval_cosine_accuracy"] == 0.25
     assert metrics["retrieval/final/retrieval_cosine_accuracy"] == 0.75
     assert metrics["retrieval/delta/retrieval_cosine_accuracy"] == 0.5

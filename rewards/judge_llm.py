@@ -4,6 +4,6 @@
 # resolved model/server config to Ray workers, and this primitive reads it at
 # reward-call time.
 
-from leap_finetune.rl.judge import judge_llm_reward
+from liquid_finetune.rl.judge import judge_llm_reward
 
 __all__ = ["judge_llm_reward"]

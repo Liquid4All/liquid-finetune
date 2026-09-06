@@ -1,7 +1,7 @@
 import pytest
 
-from leap_finetune import run_config
-from leap_finetune.config import (
+from liquid_finetune import run_config
+from liquid_finetune.config import (
     DatasetConfig,
     EvalConfig,
     EvalRunConfig,
@@ -12,10 +12,10 @@ from leap_finetune.config import (
     parse_job_config,
     resolve_config_path,
 )
-from leap_finetune.distribution.distributed_configs import (
+from liquid_finetune.distribution.distributed_configs import (
     strip_distributed_training_config,
 )
-from leap_finetune.training.default_configs import TRAINING_DEFAULTS
+from liquid_finetune.training.default_configs import TRAINING_DEFAULTS
 
 from conftest import BASE_DPO_DATASET, BASE_SFT_DATASET, write_config
 
@@ -125,31 +125,31 @@ class TestDirectPythonConfig:
             return {"ok": True}
 
         monkeypatch.setattr(
-            "leap_finetune.cli.main._assert_local_cuda_available",
+            "liquid_finetune.cli.main._assert_local_cuda_available",
             lambda: None,
         )
         monkeypatch.setattr(
-            "leap_finetune.cli.main.check_and_handle_slurm",
+            "liquid_finetune.cli.main.check_and_handle_slurm",
             lambda *args, **kwargs: False,
         )
         monkeypatch.setattr(
-            "leap_finetune.distribution.backends.kuberay.check_and_handle_kuberay",
+            "liquid_finetune.distribution.backends.kuberay.check_and_handle_kuberay",
             lambda *args, **kwargs: False,
         )
         monkeypatch.setattr(
-            "leap_finetune.distribution.backends.modal.check_and_handle_modal",
+            "liquid_finetune.distribution.backends.modal.check_and_handle_modal",
             lambda *args, **kwargs: False,
         )
         monkeypatch.setattr(
-            "leap_finetune.training.utils.logging.setup_training_environment",
+            "liquid_finetune.training.utils.logging.setup_training_environment",
             lambda: None,
         )
         monkeypatch.setattr(
-            "leap_finetune.distribution.ray_trainer.ray_trainer",
+            "liquid_finetune.distribution.ray_trainer.ray_trainer",
             fake_ray_trainer,
         )
         monkeypatch.setattr(
-            "leap_finetune.data_loading.dataset_loader.DatasetLoader.quick_validate",
+            "liquid_finetune.data_loading.dataset_loader.DatasetLoader.quick_validate",
             lambda self: None,
         )
 
@@ -174,7 +174,7 @@ class TestDirectPythonConfig:
             return {"benchmark/tiny_qa/score": 1.0}
 
         monkeypatch.setattr(
-            "leap_finetune.evaluation.runner.run_eval_config",
+            "liquid_finetune.evaluation.runner.run_eval_config",
             fake_run_eval_config,
         )
 
@@ -208,23 +208,23 @@ class TestDirectPythonConfig:
             return {"benchmark/tiny_qa/score": 1.0}
 
         monkeypatch.setattr(
-            "leap_finetune.cli.main.check_and_handle_slurm",
+            "liquid_finetune.cli.main.check_and_handle_slurm",
             lambda *args, **kwargs: False,
         )
         monkeypatch.setattr(
-            "leap_finetune.distribution.backends.kuberay.check_and_handle_kuberay",
+            "liquid_finetune.distribution.backends.kuberay.check_and_handle_kuberay",
             lambda *args, **kwargs: False,
         )
         monkeypatch.setattr(
-            "leap_finetune.distribution.backends.modal.check_and_handle_modal",
+            "liquid_finetune.distribution.backends.modal.check_and_handle_modal",
             lambda *args, **kwargs: False,
         )
         monkeypatch.setattr(
-            "leap_finetune.cli.main._assert_local_cuda_available",
+            "liquid_finetune.cli.main._assert_local_cuda_available",
             lambda: pytest.fail("eval-only run_config should not require CUDA"),
         )
         monkeypatch.setattr(
-            "leap_finetune.evaluation.runner.run_eval_config",
+            "liquid_finetune.evaluation.runner.run_eval_config",
             fake_run_eval_config,
         )
 

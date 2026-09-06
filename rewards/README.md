@@ -136,7 +136,7 @@ Create a folder under `tasks/` with `__init__.py` and `recipe.py`:
 
 ```python
 # rewards/tasks/my_task/recipe.py
-from leap_finetune.rl.rewards import Recipe
+from liquid_finetune.rl.rewards import Recipe
 
 
 def my_correctness_reward(completions, solution, **kwargs):
@@ -172,7 +172,7 @@ Load a sibling recipe as a parent and subclass it:
 
 ```python
 # rewards/tasks/my_grounding_plus_captions/recipe.py
-from leap_finetune.rl.rewards import load_recipe
+from liquid_finetune.rl.rewards import load_recipe
 
 VLMGroundingIoURecipe = load_recipe(
     "./rewards/tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe"

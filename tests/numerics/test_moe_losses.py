@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from leap_finetune.training.moe_utils.losses import (
+from liquid_finetune.training.moe_utils.losses import (
     MoETrainingConfig,
     apply_moe_losses,
     switch_load_balancing_loss,

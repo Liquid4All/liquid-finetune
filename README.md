@@ -1,13 +1,12 @@
 <div align="center">
   <img
     src="./banner.png"
-    alt="leap-finetune"
+    alt="liquid-finetune"
     style="width: 100%; max-width: 100%; height: auto; display: inline-block; margin-bottom: 0.5em; margin-top: 0.5em;"
   />
   <div style="display: flex; justify-content: center; gap: 0.5em;">
     <a href="https://playground.liquid.ai/"><strong>Try LFM</strong></a> -
-    <a href="https://docs.liquid.ai/lfm"><strong>Documentation</strong></a> -
-    <a href="https://leap.liquid.ai/"><strong>LEAP</strong></a>
+    <a href="https://docs.liquid.ai/lfm"><strong>Documentation</strong></a>
   </div>
   <br/>
   <a href="https://discord.com/invite/liquid-ai"><img src="https://img.shields.io/discord/1385439864920739850?style=for-the-badge&logo=discord&logoColor=white&label=Discord&color=5865F2" alt="Join Discord"></a>
@@ -25,7 +24,7 @@
 <a href="#contributing">Contributing</a>
 </p>
 
-LEAP-Finetune is a minimal fine-tuning repo for LFM2. It handles dataset
+Liquid Finetune is a minimal fine-tuning repo for LFM2. It handles dataset
 formatting, validation, distributed orchestration, checkpointing, and export
 for local GPU nodes, SLURM clusters, Modal, and Kubernetes/KubeRay.
 
@@ -44,7 +43,7 @@ Clone the repo:
 
 ```bash
 git clone <repository-url>
-cd leap_finetune
+cd liquid-finetune
 ```
 
 ### Backend Install Profiles
@@ -68,10 +67,10 @@ After `UV_PROJECT` is set, normal commands stay the same: `uv sync`,
 
 ```bash
 source .venv/bin/activate
-leap-finetune job_configs/sft_example_with_slurm.yaml
+liquid-finetune job_configs/sft_example_with_slurm.yaml
 
 # ROCm, after `export UV_PROJECT=envs/rocm`:
-uv run leap-finetune job_configs/sft_example_with_slurm.yaml
+uv run liquid-finetune job_configs/sft_example_with_slurm.yaml
 ```
 
 <details>
@@ -115,13 +114,13 @@ To inspect the active environment:
 
 ```bash
 # CUDA, after `uv sync`
-uv run leap-finetune env fa2-status
+uv run liquid-finetune env fa2-status
 
 # ROCm, after `export UV_PROJECT=envs/rocm && uv sync`
-uv run leap-finetune env fa2-status
+uv run liquid-finetune env fa2-status
 
 # Fail if FA2 is not usable
-uv run leap-finetune env fa2-status --require
+uv run liquid-finetune env fa2-status --require
 ```
 
 `fa2-status` reports the detected backend, Python tag, platform, Torch version,
@@ -137,11 +136,11 @@ time. Install without the pinned FA2 group first, then repair FA2 separately:
 ```bash
 # CUDA without pinned FA2
 uv sync --no-group flash-attn
-uv run leap-finetune env install-fa2
+uv run liquid-finetune env install-fa2
 
 # ROCm HF training without pinned FA2/vLLM
 UV_PROJECT=envs/rocm uv sync --no-group rocm-fa2 --no-group rocm-vllm
-UV_PROJECT=envs/rocm uv run leap-finetune env install-fa2
+UV_PROJECT=envs/rocm uv run liquid-finetune env install-fa2
 ```
 
 `install-fa2` tries, in order:
@@ -155,7 +154,7 @@ explicit escape hatch on a machine with the matching CUDA or ROCm toolchain and
 enough build memory:
 
 ```bash
-uv run leap-finetune env install-fa2 --allow-source-build
+uv run liquid-finetune env install-fa2 --allow-source-build
 ```
 
 ROCm GRPO/vLLM support requires the full `rocm-vllm` profile and therefore a
@@ -200,13 +199,13 @@ peft_config:
 Launch training:
 
 ```bash
-uv run leap-finetune job_configs/sft_example.yaml
+uv run liquid-finetune job_configs/sft_example.yaml
 ```
 
 Training uses Ray Train and Accelerate for distributed execution. SFT, DPO, VLM
 SFT, and VLM DPO automatically use the native Hugging Face Trainer when exactly
 one GPU is visible. Text and VLM GRPO use the native Trainer only for one-GPU
-`vllm_mode: colocate` runs. Set `LEAP_LAUNCHER=ray` to force Ray. Unless
+`vllm_mode: colocate` runs. Set `LIQUID_LAUNCHER=ray` to force Ray. Unless
 `output_dir` is set, results are written to
 `outputs/{project_name}/{run_name}/`. Each run gets a unique name based on the
 model, dataset, learning rate, and timestamp.
@@ -235,31 +234,31 @@ During development, prefer the repo environment so you get the lockfile-managed
 CUDA/vLLM stack:
 
 ```bash
-uv run leap-finetune job_configs/sft_example.yaml
-uv run leap-finetune run job_configs/sft_example.yaml
-uv run leap-finetune job_configs/eval_standalone_example.yaml
-uv run leap-finetune eval job_configs/eval_standalone_example.yaml --output results.json
+uv run liquid-finetune job_configs/sft_example.yaml
+uv run liquid-finetune run job_configs/sft_example.yaml
+uv run liquid-finetune job_configs/eval_standalone_example.yaml
+uv run liquid-finetune eval job_configs/eval_standalone_example.yaml --output results.json
 ```
 
 Install the command as a reusable tool from a checkout:
 
 ```bash
 uv tool install --editable . --force
-leap-finetune /absolute/path/to/config.yaml
-leap-finetune slurm /absolute/path/to/config.yaml --output-dir /absolute/path/to/slurms
-leap-finetune /absolute/path/to/eval_config.yaml
-leap-finetune eval /absolute/path/to/eval_config.yaml --output /absolute/path/to/results.json
+liquid-finetune /absolute/path/to/config.yaml
+liquid-finetune slurm /absolute/path/to/config.yaml --output-dir /absolute/path/to/slurms
+liquid-finetune /absolute/path/to/eval_config.yaml
+liquid-finetune eval /absolute/path/to/eval_config.yaml --output /absolute/path/to/results.json
 ```
 
 `uv tool install` creates an isolated tool environment. Use explicit config
 paths when invoking the command outside the repo; bare names like
 `sft_example.yaml` resolve from the current directory's `job_configs/` first,
-then from the installed package's `LEAP_FINETUNE_DIR`.
+then from the installed package's `LIQUID_FINETUNE_DIR`.
 
 For one-off execution without installing the command:
 
 ```bash
-uvx --from . leap-finetune /absolute/path/to/config.yaml
+uvx --from . liquid-finetune /absolute/path/to/config.yaml
 ```
 
 You can also start a run from Python. This uses the same backend dispatch as
@@ -269,7 +268,7 @@ and VLM DPO use the native Trainer on one GPU; GRPO uses it only for one-GPU
 colocated vLLM; other modes use Ray.
 
 ```python
-from leap_finetune import run_config
+from liquid_finetune import run_config
 
 run_config("/absolute/path/to/config.yaml")
 ```
@@ -277,12 +276,12 @@ run_config("/absolute/path/to/config.yaml")
 Standalone evals use the same entry point:
 
 ```python
-from leap_finetune import run_config
+from liquid_finetune import run_config
 
 metrics = run_config("/absolute/path/to/eval_config.yaml")
 ```
 
-Run that file inside an environment where `leap-finetune` is installed:
+Run that file inside an environment where `liquid-finetune` is installed:
 
 ```bash
 uv run --with-editable . python launch_training.py
@@ -312,7 +311,7 @@ Add a `modal:` section:
 modal:
   gpu: "H100:4"
   timeout: 86400
-  output_volume: "leap-finetune"
+  output_volume: "liquid-finetune"
   output_dir: "/outputs"
   detach: false
 ```
@@ -320,7 +319,7 @@ modal:
 Run:
 
 ```bash
-uv run leap-finetune job_configs/sft_example_modal.yaml
+uv run liquid-finetune job_configs/sft_example_modal.yaml
 ```
 
 In attached mode (`detach: false`), the CLI builds the container image,
@@ -330,8 +329,8 @@ saves checkpoints to a Modal Volume.
 Retrieve checkpoints:
 
 ```bash
-modal volume ls leap-finetune
-modal volume get leap-finetune <checkpoint-name> ./local-outputs
+modal volume ls liquid-finetune
+modal volume get liquid-finetune <checkpoint-name> ./local-outputs
 ```
 
 Set `detach: true` to submit and disconnect. The CLI prints the Modal app ID
@@ -347,17 +346,17 @@ Use the printed `ap-...` app ID for detached logs. See
 
 ### SLURM
 
-If your config includes a `slurm:` section, `leap-finetune` auto-generates and
+If your config includes a `slurm:` section, `liquid-finetune` auto-generates and
 submits a SLURM script:
 
 ```bash
-uv run leap-finetune job_configs/sft_example_with_slurm.yaml
+uv run liquid-finetune job_configs/sft_example_with_slurm.yaml
 ```
 
 Generate a SLURM script without submitting it:
 
 ```bash
-uv run leap-finetune slurm <path_to_config.yaml>
+uv run liquid-finetune slurm <path_to_config.yaml>
 ```
 
 Monitor your SLURM jobs in a TUI:
@@ -368,19 +367,19 @@ uv run turm --me
 
 ### Kubernetes / KubeRay
 
-If your config includes a `kuberay:` section, `leap-finetune` submits a KubeRay
+If your config includes a `kuberay:` section, `liquid-finetune` submits a KubeRay
 `RayJob` instead of launching local training. You need a configured Kubernetes
 context, KubeRay CRDs installed, and a container image that already contains
 this repo plus its Python environment.
 
 ```yaml
 kuberay:
-  image: "registry.example.com/leap-finetune:latest"
+  image: "registry.example.com/liquid-finetune:latest"
   namespace: "training"
   worker_replicas: 2
   gpus_per_worker: 4
   output_dir: "/outputs"
-  output_pvc: "leap-finetune-outputs"
+  output_pvc: "liquid-finetune-outputs"
   env:
     HF_HOME: "/outputs/hf-cache"
 ```
@@ -388,7 +387,7 @@ kuberay:
 Run the same command as local training:
 
 ```bash
-uv run leap-finetune path/to/config.yaml
+uv run liquid-finetune path/to/config.yaml
 ```
 
 The CLI creates a ConfigMap for the training config, submits a RayJob, and
@@ -437,12 +436,6 @@ modal:
   secrets:
     - "wandb-secret"
 ```
-
-### Bundle Checkpoints for LEAP
-
-When training is done, bundle your output checkpoint with `leap-bundle` to use
-it directly within LEAP. See the
-[LEAP bundle quickstart](https://leap.liquid.ai/docs/leap-bundle/quick-start?utm_source=github&utm_medium=link&utm_campaign=LEAP&utm_content=general).
 
 ## Datasets
 
@@ -532,9 +525,9 @@ strings or message lists:
 ```
 
 KTO rows are tokenized by TRL's `KTOTrainer` on each worker rather than by
-Leap's pretokenization pipeline. `per_device_train_batch_size` must be greater
+Liquid's pretokenization pipeline. `per_device_train_batch_size` must be greater
 than 1 because KTO estimates its KL term from mismatched completions within a
-batch. Leap preserves that batch order, uses the train batch size for evaluation,
+batch. Liquid preserves that batch order, uses the train batch size for evaluation,
 and drops incomplete final batches. For imbalanced labels, tune
 `desirable_weight` and `undesirable_weight`; TRL logs a warning when the
 weights do not compensate for the label balance.
@@ -563,8 +556,8 @@ Gradient accumulation is intentionally rejected—select a cached loss and set
 `mini_batch_size` when a larger effective batch is needed.
 
 ```bash
-uv run leap-finetune job_configs/embedding_example.yaml
-uv run leap-finetune job_configs/colbert_example.yaml
+uv run liquid-finetune job_configs/embedding_example.yaml
+uv run liquid-finetune job_configs/colbert_example.yaml
 ```
 
 ### VLM SFT
@@ -814,14 +807,14 @@ Example configs:
 Launch the same way as SFT/DPO:
 
 ```bash
-uv run leap-finetune job_configs/grpo_example.yaml
+uv run liquid-finetune job_configs/grpo_example.yaml
 ```
 
 ### Agentic Environments
 
 For tasks where the environment state evolves from agent actions, such as
 browsing, tool use, game simulators, or stateful multi-turn tasks,
-`leap-finetune` supports [OpenEnv](https://github.com/meta-pytorch/OpenEnv)
+`liquid-finetune` supports [OpenEnv](https://github.com/meta-pytorch/OpenEnv)
 via an optional `rl_env:` block:
 
 ```bash
@@ -829,7 +822,7 @@ uv sync --extra rl-env
 ```
 
 See
-[`src/leap_finetune/rl/environments/README.md`](./src/leap_finetune/rl/environments/README.md).
+[`src/liquid_finetune/rl/environments/README.md`](./src/liquid_finetune/rl/environments/README.md).
 For anything scorable by a pure Python function, prefer the `rewards:` path; it
 is simpler and faster.
 
@@ -856,13 +849,13 @@ metrics include `short_answer`, `grounding_iou`, `mcq_gen`, and
 `logprob_zero_shot`. Results are logged to wandb at
 `benchmark/{name}/score`.
 
-See the [Evaluation Guide](./src/leap_finetune/evaluation/README.md) for data
+See the [Evaluation Guide](./src/liquid_finetune/evaluation/README.md) for data
 format examples, YAML reference, and custom metrics.
 
 Run the same eval suite without training:
 
 ```bash
-uv run leap-finetune job_configs/eval_standalone_example.yaml
+uv run liquid-finetune job_configs/eval_standalone_example.yaml
 ```
 
 Standalone eval configs use `model_name` or `checkpoint`, `evals:`, and an
@@ -874,13 +867,13 @@ Use the explicit `eval` subcommand when you want CLI-only eval options such as
 writing metrics to JSON:
 
 ```bash
-uv run leap-finetune eval job_configs/eval_standalone_example.yaml --output results.json
+uv run liquid-finetune eval job_configs/eval_standalone_example.yaml --output results.json
 ```
 
 The same path is available from Python:
 
 ```python
-from leap_finetune import run_config
+from liquid_finetune import run_config
 
 metrics = run_config("job_configs/eval_standalone_example.yaml")
 ```
@@ -975,16 +968,16 @@ with LFM2 model support, so SSH access to those repos is required.
 ## Quantization / GGUF Export
 
 Export a HuggingFace checkpoint or PEFT adapter to GGUF with
-`leap-export-gguf`:
+`liquid-export-gguf`:
 
 ```bash
-uv run leap-export-gguf /path/to/checkpoint --quant F16 --output-dir ./outputs/gguf
+uv run liquid-export-gguf /path/to/checkpoint --quant F16 --output-dir ./outputs/gguf
 ```
 
 Repeat `--quant` to produce multiple outputs:
 
 ```bash
-uv run leap-export-gguf /path/to/checkpoint \
+uv run liquid-export-gguf /path/to/checkpoint \
   --quant F16 \
   --quant Q4_K_M \
   --output-dir ./outputs/gguf \
@@ -999,7 +992,7 @@ require a built llama.cpp checkout containing `build/bin/llama-quantize`; pass
 PEFT adapter directories can be exported with `F16`, `BF16`, `F32`, or `Q8_0`:
 
 ```bash
-uv run leap-export-gguf /path/to/adapter \
+uv run liquid-export-gguf /path/to/adapter \
   --base-model-path /path/to/base-model \
   --quant F16 \
   --output-dir ./outputs/gguf
@@ -1011,7 +1004,7 @@ the merged checkpoint.
 ## Advanced Configuration
 
 Default base configs live in
-[`src/leap_finetune/training/default_configs/`](./src/leap_finetune/training/default_configs/)
+[`src/liquid_finetune/training/default_configs/`](./src/liquid_finetune/training/default_configs/)
 and are auto-discovered. New configs added to those files are immediately
 available via `extends` in YAML.
 

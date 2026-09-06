@@ -1,7 +1,7 @@
 import pytest
 
-from leap_finetune.distribution.data_sharding import ExpertParallelDataConfig
-from leap_finetune.distribution.rank_groups import build_replica_group_blocks
+from liquid_finetune.distribution.data_sharding import ExpertParallelDataConfig
+from liquid_finetune.distribution.rank_groups import build_replica_group_blocks
 
 
 def test_build_replica_group_blocks_chunks_workers_per_node():

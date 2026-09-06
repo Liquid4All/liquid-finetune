@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import Mock
 
-from leap_finetune.training import grpo
+from liquid_finetune.training import grpo
 
 
 def test_existing_adapter_takes_precedence_over_fresh_peft(monkeypatch) -> None:

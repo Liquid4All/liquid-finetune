@@ -1,12 +1,12 @@
 import torch
-from leap_finetune.data_loading.tokenize_data import (
+from liquid_finetune.data_loading.tokenize_data import (
     _final_assistant_span_mask,
     tokenize_and_pack_sft,
     tokenize_dpo,
     tokenize_dpo_dataset,
     tokenize_sft,
 )
-from leap_finetune.training.sft import build_sft_data_collator
+from liquid_finetune.training.sft import build_sft_data_collator
 
 
 class _FakeTokenizer:
@@ -261,7 +261,7 @@ def test_tokenize_and_pack_sft_preserves_assistant_masks(monkeypatch):
     )
 
     monkeypatch.setattr(
-        "leap_finetune.data_loading.tokenize_data.ray.data.from_arrow",
+        "liquid_finetune.data_loading.tokenize_data.ray.data.from_arrow",
         lambda table: _FakePackedDataset(table.to_pylist()),
     )
 
@@ -326,7 +326,7 @@ def test_tokenize_and_pack_sft_can_drop_overlength_without_truncating():
 
 
 def test_tokenize_dpo_emits_collated_pair_length(monkeypatch):
-    import leap_finetune.data_loading.tokenize_data as tokenize_data
+    import liquid_finetune.data_loading.tokenize_data as tokenize_data
 
     monkeypatch.setattr(tokenize_data, "maybe_extract_prompt", lambda row: row)
     monkeypatch.setattr(

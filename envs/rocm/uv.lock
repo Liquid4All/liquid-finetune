@@ -1044,7 +1044,7 @@ version = "2.31.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "google-auth" },
-    { name = "googleapis-common-protos" },
+    { name = "googliquidis-common-protos" },
     { name = "proto-plus" },
     { name = "protobuf" },
     { name = "requests" },
@@ -1121,15 +1121,15 @@ wheels = [
 ]
 
 [[package]]
-name = "googleapis-common-protos"
+name = "googliquidis-common-protos"
 version = "1.75.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b5/c8/f439cffde755cffa462bfbb156278fa6f9d09119719af9814b858fd4f81f/googleapis_common_protos-1.75.0.tar.gz", hash = "sha256:53a062ff3c32552fbd62c11fe23768b78e4ddf0494d5e5fd97d3f4689c75fbbd", size = 151035, upload-time = "2026-05-07T08:04:49.423Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b5/c8/f439cffde755cffa462bfbb156278fa6f9d09119719af9814b858fd4f81f/googliquidis_common_protos-1.75.0.tar.gz", hash = "sha256:53a062ff3c32552fbd62c11fe23768b78e4ddf0494d5e5fd97d3f4689c75fbbd", size = 151035, upload-time = "2026-05-07T08:04:49.423Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e7/c8/e2645aa8ed02fd4c7a2f59d68783b65b1f3cbdfe39a6308e156509d1fee8/googleapis_common_protos-1.75.0-py3-none-any.whl", hash = "sha256:961ed60399c457ceb0ee8f285a84c870aabc9c6a832b9d37bb281b5bebde43ed", size = 300631, upload-time = "2026-05-07T08:03:30.345Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/c8/e2645aa8ed02fd4c7a2f59d68783b65b1f3cbdfe39a6308e156509d1fee8/googliquidis_common_protos-1.75.0-py3-none-any.whl", hash = "sha256:961ed60399c457ceb0ee8f285a84c870aabc9c6a832b9d37bb281b5bebde43ed", size = 300631, upload-time = "2026-05-07T08:03:30.345Z" },
 ]
 
 [[package]]
@@ -1533,7 +1533,7 @@ wheels = [
 ]
 
 [[package]]
-name = "leap-finetune"
+name = "liquid-finetune"
 version = "0.1.0"
 source = { editable = "../../" }
 dependencies = [
@@ -1604,11 +1604,11 @@ dev = [
 flash-attn = [{ name = "flash-attn", marker = "python_full_version == '3.12.*' and platform_machine == 'x86_64' and sys_platform == 'linux'", url = "https://github.com/adithyaxx/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu13torch2.11cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" }]
 
 [[package]]
-name = "leap-finetune-rocm-env"
+name = "liquid-finetune-rocm-env"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "leap-finetune" },
+    { name = "liquid-finetune" },
 ]
 
 [package.dev-dependencies]
@@ -1635,7 +1635,7 @@ rocm-vllm = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "leap-finetune", editable = "../../" }]
+requires-dist = [{ name = "liquid-finetune", editable = "../../" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -2407,7 +2407,7 @@ name = "opentelemetry-exporter-otlp-proto-grpc"
 version = "1.43.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "googleapis-common-protos" },
+    { name = "googliquidis-common-protos" },
     { name = "grpcio" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-common" },
@@ -2425,7 +2425,7 @@ name = "opentelemetry-exporter-otlp-proto-http"
 version = "1.43.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "googleapis-common-protos" },
+    { name = "googliquidis-common-protos" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-exporter-otlp-proto-common" },
     { name = "opentelemetry-proto" },

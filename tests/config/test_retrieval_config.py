@@ -1,7 +1,7 @@
 import pytest
 import yaml
 
-from leap_finetune.config.parser import materialize_job_config, parse_job_config
+from liquid_finetune.config.parser import materialize_job_config, parse_job_config
 
 pytestmark = pytest.mark.configs
 

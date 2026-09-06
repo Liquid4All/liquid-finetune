@@ -1,5 +1,5 @@
 [project]
-name = "leap-finetune"
+name = "liquid-finetune"
 version = "0.1.0"
 description = "A minimal fine-tuning repo for LFM2, fully built on Open Source."
 readme = "README.md"
@@ -41,9 +41,9 @@ rl-env = [
 ]
 
 [project.scripts]
-leap-finetune = "leap_finetune:main"
-leap-export-manual-sharded-checkpoint = "leap_finetune.cli.export_manual_sharded_checkpoint:main"
-leap-export-gguf = "leap_finetune.cli.export_gguf:main"
+liquid-finetune = "liquid_finetune:main"
+liquid-export-manual-sharded-checkpoint = "liquid_finetune.cli.export_manual_sharded_checkpoint:main"
+liquid-export-gguf = "liquid_finetune.cli.export_gguf:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -82,7 +82,7 @@ markers = [
 addopts = "-v --tb=short"
 
 [tool.ruff]
-exclude = ["src/leap_finetune/quantization/gguf"]
+exclude = ["src/liquid_finetune/quantization/gguf"]
 
 [dependency-groups]
 cuda = [

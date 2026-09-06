@@ -4,9 +4,9 @@ import torch
 from datasets import Dataset
 from PIL import Image
 
-from leap_finetune.data_loading import image_loader
-from leap_finetune.data_loading.length_grouping import get_tile_count_grouped_sampler
-from leap_finetune.data_loading.vlm_batching import (
+from liquid_finetune.data_loading import image_loader
+from liquid_finetune.data_loading.length_grouping import get_tile_count_grouped_sampler
+from liquid_finetune.data_loading.vlm_batching import (
     add_vlm_tile_counts,
     estimate_vlm_tile_count,
 )
