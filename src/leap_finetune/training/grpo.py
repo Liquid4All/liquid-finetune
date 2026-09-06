@@ -52,7 +52,6 @@ class LFMGRPOTrainer(QATGRPOReferenceMixin, GRPOTrainer):
     """Text GRPO trainer with QAT-aware reference preparation."""
 
 
-
 def _apply_grpo_peft(
     model: PreTrainedModel,
     *,
