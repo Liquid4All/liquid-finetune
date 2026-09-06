@@ -29,6 +29,7 @@ from leap_finetune.training.peft.peft import (
 )
 from leap_finetune.training.utils.trainer_mixins import (
     RayDataLoaderMixin,
+    RayPrecomputedRefLogpsMixin,
 )
 from leap_finetune.training.utils.trainer_lifecycle import (
     run_training_safely,
@@ -44,7 +45,7 @@ from leap_finetune.training.utils.config_filter import (
 logger = logging.getLogger(__name__)
 
 
-class LFMDPOTrainer(RayDataLoaderMixin, DPOTrainer):
+class LFMDPOTrainer(RayPrecomputedRefLogpsMixin, RayDataLoaderMixin, DPOTrainer):
     """DPO trainer with Ray-sharded data loaders."""
 
     def _prepare_dataset(self, dataset, *args, **kwargs):

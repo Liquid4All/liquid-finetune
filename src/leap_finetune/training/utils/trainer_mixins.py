@@ -1,6 +1,12 @@
 import logging
+import os
 
+import torch
+
+from accelerate.utils import tqdm
+from datasets import Dataset, IterableDataset
 from torch.utils.data import DataLoader
+from trl.models import prepare_deepspeed
 
 from leap_finetune.checkpointing.manual_sharded import (
     finalize_manual_sharded_export_metadata,
@@ -45,6 +51,60 @@ class RayDataLoaderMixin:
             batch_size=self.args.per_device_eval_batch_size,
             collate_fn=self.data_collator,
         )
+
+
+class RayPrecomputedRefLogpsMixin:
+    """Precompute reference log-probs on each already-sharded Ray dataset."""
+
+    def _precompute_ref_logps(
+        self, dataset: Dataset, name: str, batch_size: int
+    ) -> Dataset:
+        if isinstance(dataset, IterableDataset):
+            raise ValueError(
+                "`precompute_ref_log_probs=True` is not supported with IterableDataset. "
+                "Use a map-style dataset or disable precomputation."
+            )
+
+        data_seed = (
+            self.args.data_seed if self.args.data_seed is not None else self.args.seed
+        )
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            collate_fn=self.data_collator,
+            num_workers=self.args.dataloader_num_workers,
+            pin_memory=self.args.dataloader_pin_memory,
+            shuffle=False,
+            generator=torch.Generator().manual_seed(data_seed),
+        )
+
+        if self.ref_model is None and self.is_deepspeed_enabled:
+            if self._precompute_engine is None:
+                self._precompute_engine = prepare_deepspeed(
+                    self.model, self.accelerator
+                )
+            model = self._precompute_engine
+        else:
+            model = self.ref_model or self.model
+
+        ref_chosen_logps = []
+        ref_rejected_logps = []
+        for padded_batch in tqdm(
+            iterable=dataloader,
+            desc=f"Computing reference log probs for local {name} dataset shard",
+            disable=bool(os.environ.get("TQDM_DISABLE", "")),
+        ):
+            padded_batch = self._prepare_inputs(padded_batch)
+            ref_chosen_logp, ref_rejected_logp = self.compute_ref_log_probs(
+                model, padded_batch
+            )
+            ref_chosen_logps.append(ref_chosen_logp.cpu())
+            ref_rejected_logps.append(ref_rejected_logp.cpu())
+
+        chosen = torch.cat(ref_chosen_logps).float().numpy()
+        rejected = torch.cat(ref_rejected_logps).float().numpy()
+        dataset = dataset.add_column("ref_chosen_logps", chosen)
+        return dataset.add_column("ref_rejected_logps", rejected)
 
 
 def validate_manual_sharded_training_args(

@@ -33,6 +33,7 @@ from leap_finetune.training.utils.logging import (
 from leap_finetune.training.utils.trainer_mixins import (
     ManualShardedCheckpointMixin,
     validate_manual_sharded_training_args,
+    RayPrecomputedRefLogpsMixin,
 )
 from leap_finetune.training.utils.trainer_lifecycle import run_training_safely
 from leap_finetune.training.utils.config_filter import filter_runtime_config_kwargs
@@ -75,7 +76,9 @@ MOE_DPO_EXCLUDED_KEYS = {
 }
 
 
-class LFMMoeDPOTrainer(ManualShardedCheckpointMixin, DPOTrainer):
+class LFMMoeDPOTrainer(
+    RayPrecomputedRefLogpsMixin, ManualShardedCheckpointMixin, DPOTrainer
+):
     """DPO Trainer for MoE models with EP/FSDP2 support."""
 
     def __init__(
