@@ -1025,6 +1025,10 @@ Profiles are `gguf_q4_0`, `gguf_q8_0`, `mlx_q4`, `mlx_q8`, `vllm_fp8`,
 models with a `qat_config.json` sidecar. DPO quantizes its reference by default. QAT GRPO
 requires `use_vllm: false` so rollout generation and optimization share the
 same fake-quantized policy.
+Full fine-tuning automatically keeps QAT-targeted trainable weights in FP32 so
+small updates are not rounded away by BF16 parameter storage; forward compute
+still uses the configured autocast precision. Full-weight references match the
+policy, while shared frozen PEFT bases remain in their original dtype.
 
 For vLLM FP8, `target: cuda` or `target: rocm_mi300` selects deployment math
 independently of the training host; `auto` resolves once and is saved in the

@@ -45,6 +45,23 @@ The vision tower, routers, embeddings, normalization layers, and tied output
 heads stay floating point. GGUF also keeps the multimodal projector floating
 point, matching the current GGUF deployment boundary.
 
+For full fine-tuning, QAT-targeted weights use FP32 trainable parameters by
+default. Forward compute still follows the trainer's autocast setting. This
+prevents small optimizer updates from being rounded away when the model was
+loaded in BF16. Explicit full-weight DPO/GRPO references use the same precision
+as the policy. Frozen PEFT base weights retain the model's original dtype. The
+advanced override is:
+
+```yaml
+training_config:
+  qat:
+    type: gguf_q4_0
+    parameter_precision: model # auto (default), model, or float32
+```
+
+Using `model` reduces optimizer memory, but low learning rates can leave most
+BF16 weights bit-identical and make quantization-bin recovery ineffective.
+
 Checkpoints remain ordinary Hugging Face checkpoints. `qat_config.json` records
 the profile, and resume fails if it does not match the requested profile.
 Loading without a `qat:` training option produces the normal floating-point

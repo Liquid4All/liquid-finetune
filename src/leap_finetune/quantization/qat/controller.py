@@ -29,6 +29,7 @@ class QATPreparationReport:
     expert_tensors: list[str] = field(default_factory=list)
     excluded: list[str] = field(default_factory=list)
     incompatible: list[str] = field(default_factory=list)
+    float32_parameters: list[str] = field(default_factory=list)
 
     @property
     def transformed_count(self) -> int:
@@ -228,6 +229,7 @@ def prepare_model_for_qat(
         return QATPreparationReport(profile=profile.name)
 
     report = QATPreparationReport(profile=profile.name)
+    target_parameters: dict[str, nn.Parameter] = {}
     for name, module in list(model.named_modules()):
         expert_names, incompatible_experts = _prepare_experts(
             name, module, profile, config.get("target")
@@ -236,6 +238,9 @@ def prepare_model_for_qat(
             report.incompatible.extend(incompatible_experts)
         if expert_names or incompatible_experts:
             report.expert_tensors.extend(expert_names)
+            for tensor_name in expert_names:
+                parameter_name = tensor_name.rsplit(".", 1)[-1]
+                target_parameters[tensor_name] = getattr(module, parameter_name)
             continue
         if not isinstance(module, nn.Linear):
             continue
@@ -243,6 +248,7 @@ def prepare_model_for_qat(
             if _is_compatible(module.weight, profile):
                 _prepare_linear(module, profile, config.get("target"))
                 report.linears.append(name)
+                target_parameters[f"{name}.weight"] = module.weight
             else:
                 report.incompatible.append(f"{name}.weight")
         else:
@@ -251,15 +257,29 @@ def prepare_model_for_qat(
         raise ValueError(
             f"QAT profile {profile.name!r} matched no supported model tensors"
         )
+    parameter_precision = config.get("parameter_precision", "auto")
+    uses_peft = bool(
+        train_config.get("peft_config") or train_config.get("adapter_path")
+    )
+    promote_parameters = parameter_precision == "float32" or (
+        parameter_precision == "auto" and not uses_peft
+    )
+    if promote_parameters:
+        with torch.no_grad():
+            for name, parameter in target_parameters.items():
+                if parameter.is_floating_point() and parameter.dtype != torch.float32:
+                    parameter.data = parameter.data.float()
+                    report.float32_parameters.append(name)
     model._leap_qat_config = config
     model._leap_qat_report = report
     logger.info(
-        "QAT prepared profile=%s linears=%d expert_tensors=%d excluded=%d incompatible=%d",
+        "QAT prepared profile=%s linears=%d expert_tensors=%d excluded=%d incompatible=%d float32_parameters=%d",
         profile.name,
         len(report.linears),
         len(report.expert_tensors),
         len(report.excluded),
         len(report.incompatible),
+        len(report.float32_parameters),
     )
     logger.debug("QAT linear targets: %s", report.linears)
     logger.debug("QAT expert targets: %s", report.expert_tensors)
