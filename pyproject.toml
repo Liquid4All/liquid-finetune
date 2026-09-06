@@ -79,6 +79,7 @@ markers = [
     "vlm: VLM end-to-end training tests",
     "moe: MoE end-to-end training tests",
     "retrieval: embedding and ColBERT end-to-end training tests",
+    "evaluation: inference-backend and benchmark evaluation tests",
     "single_gpu: local single-GPU end-to-end training tests",
 ]
 addopts = "-v --tb=short"
