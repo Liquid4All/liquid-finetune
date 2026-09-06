@@ -16,7 +16,7 @@ BUNDLED_CONVERT_LORA = GGUF_DIR / "convert_lora_to_gguf.py"
 # Types that convert_hf_to_gguf.py can produce directly via --outtype
 DIRECT_QUANTS = {"F16", "BF16", "F32", "Q8_0"}
 
-# Types that require two-step: convert to F16 first, then llama-quantize
+# Types that require two-step: convert to F32 first, then llama-quantize
 # Includes both legacy quants (Q4_0, Q5_0) and K-quants (Q4_K_M, Q5_K_S, etc.)
 QUANTIZE_QUANTS = {
     "Q2_K",
@@ -204,20 +204,20 @@ def export_gguf(
         convert_hf_to_gguf(model_path, out_path, outtype)
         results.append(out_path)
 
-    # Quantize quants — need F16 intermediate, then llama-quantize binary
+    # Preserve learned FP32 QAT updates until llama.cpp performs quantization.
     if needs_quantize:
         quantize_bin = resolve_quantize_binary(llama_cpp_dir)
 
-        f16_requested = "F16" in direct
-        f16_path = output_dir / f"{model_name}-F16.gguf"
+        f32_requested = "F32" in direct
+        f32_path = output_dir / f"{model_name}-F32.gguf"
 
-        if not f16_path.exists():
-            convert_hf_to_gguf(model_path, f16_path, "f16")
+        if not f32_path.exists():
+            convert_hf_to_gguf(model_path, f32_path, "f32")
 
         for quant in needs_quantize:
             out_path = output_dir / f"{model_name}-{quant}.gguf"
             quantize_gguf(
-                f16_path,
+                f32_path,
                 out_path,
                 quant,
                 quantize_bin,
@@ -225,9 +225,9 @@ def export_gguf(
             )
             results.append(out_path)
 
-        # Clean up intermediate F16 if it wasn't explicitly requested
-        if not f16_requested and f16_path.exists():
-            f16_path.unlink()
-            logger.info("Cleaned up intermediate F16 file")
+        # Clean up the lossless intermediate unless it was explicitly requested.
+        if not f32_requested and f32_path.exists():
+            f32_path.unlink()
+            logger.info("Cleaned up intermediate F32 file")
 
     return results

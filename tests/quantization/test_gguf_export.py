@@ -45,7 +45,7 @@ def test_q8_embedding_override_uses_llama_quantize(monkeypatch, tmp_path):
     def fake_convert(model, output, outtype):
         conversions.append((model, output, outtype))
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(b"f16")
+        output.write_bytes(b"f32")
         return output
 
     def fake_quantize(source, output, quant, binary, token_embedding_type=None):
@@ -67,7 +67,7 @@ def test_q8_embedding_override_uses_llama_quantize(monkeypatch, tmp_path):
         token_embedding_type="F16",
     )
 
-    assert conversions[0][2] == "f16"
+    assert conversions[0][2] == "f32"
     assert quantizations[0][2:] == (
         "Q8_0",
         Path("/opt/llama-quantize"),
