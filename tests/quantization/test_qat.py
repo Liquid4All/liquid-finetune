@@ -183,6 +183,88 @@ def test_gguf_linear_injection_quantizes_input_and_weight_at_the_matmul():
     torch.testing.assert_close(model.proj(value), expected)
 
 
+def test_full_finetune_promotes_only_qat_weights_to_float32():
+    model = _DenseModel().bfloat16()
+    keys_before = list(model.state_dict())
+
+    report = prepare_model_for_qat(model, {"qat": {"type": "gguf_q4_0"}})
+
+    assert report is not None
+    assert report.float32_parameters == ["proj.weight"]
+    assert model.proj.weight.dtype == torch.float32
+    assert model.lm_head.weight.dtype == torch.bfloat16
+    assert list(model.state_dict()) == keys_before
+
+
+@pytest.mark.parametrize(
+    "train_config",
+    [
+        {
+            "qat": {
+                "type": "gguf_q4_0",
+                "parameter_precision": "model",
+            }
+        },
+        {
+            "qat": {"type": "gguf_q4_0"},
+            "peft_config": object(),
+        },
+        {
+            "qat": {"type": "gguf_q4_0"},
+            "adapter_path": "adapter",
+        },
+    ],
+)
+def test_qat_preserves_model_precision_when_requested_or_base_is_frozen(
+    train_config,
+):
+    model = _DenseModel().bfloat16()
+
+    report = prepare_model_for_qat(model, train_config)
+
+    assert report is not None
+    assert report.float32_parameters == []
+    assert model.proj.weight.dtype == torch.bfloat16
+
+
+def test_full_weight_qat_reference_matches_policy_parameter_precision():
+    reference = _DenseModel().bfloat16()
+
+    result = prepare_dpo_reference_model(
+        {"qat": {"type": "gguf_q4_0"}},
+        policy_uses_peft=False,
+        load_model=lambda: reference,
+    )
+
+    assert result is reference
+    assert reference.proj.weight.dtype == torch.float32
+
+
+def test_q4_qat_improves_deployment_loss_on_fixed_learning_problem():
+    torch.manual_seed(42)
+    inputs = torch.randn(16, 32)
+    teacher_weight = torch.randn(2, 32) / 32**0.5
+    targets = F.linear(inputs, teacher_weight)
+
+    model = nn.Sequential(nn.Linear(32, 2, bias=False))
+    model[0].weight.data.copy_(teacher_weight)
+    ptq_loss = F.mse_loss(
+        F.linear(q8_0(inputs), q4_0(model[0].weight)),
+        targets,
+    )
+    prepare_model_for_qat(model, {"qat": {"type": "gguf_q4_0"}})
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
+
+    for _ in range(100):
+        optimizer.zero_grad()
+        loss = F.mse_loss(model(inputs), targets)
+        loss.backward()
+        optimizer.step()
+
+    qat_loss = F.mse_loss(model(inputs), targets)
+    assert qat_loss < 0.8 * ptq_loss
+
+
 @pytest.mark.parametrize("profile_name", sorted(PROFILES))
 def test_every_profile_prepares_dense_model_without_state_dict_changes(profile_name):
     model = _DenseModel()
@@ -421,6 +503,7 @@ def test_qat_config_is_nested_and_strict():
     job = JobConfig.model_validate(_job_payload(qat={"type": "mlx_q4"}))
     assert job.training_config.qat.type == "mlx_q4"
     assert job.training_config.qat.quantize_reference is True
+    assert job.training_config.qat.parameter_precision == "auto"
     with pytest.raises(ValueError, match="literal_error"):
         JobConfig.model_validate(_job_payload(qat={"type": "q4"}))
     with pytest.raises(ValueError, match="extra_forbidden"):
@@ -429,6 +512,14 @@ def test_qat_config_is_nested_and_strict():
     targeted = JobConfig.model_validate(
         _job_payload(qat={"type": "vllm_fp8", "target": "rocm_mi300"})
     )
+    explicit_precision = JobConfig.model_validate(
+        _job_payload(qat={"type": "gguf_q4_0", "parameter_precision": "float32"})
+    )
+    assert explicit_precision.training_config.qat.parameter_precision == "float32"
+    with pytest.raises(ValueError, match="literal_error"):
+        JobConfig.model_validate(
+            _job_payload(qat={"type": "mlx_q4", "parameter_precision": "fp16"})
+        )
     assert targeted.training_config.qat.target == "rocm_mi300"
     with pytest.raises(ValueError, match="target is only valid for vllm_fp8"):
         JobConfig.model_validate(

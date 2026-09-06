@@ -74,6 +74,7 @@ class QATConfig(BaseModel):
     type: QATType
     quantize_reference: bool = True
     target: Literal["auto", "cuda", "rocm_mi300"] | None = None
+    parameter_precision: Literal["auto", "model", "float32"] = "auto"
 
     @model_validator(mode="after")
     def _validate_target(self) -> QATConfig:
