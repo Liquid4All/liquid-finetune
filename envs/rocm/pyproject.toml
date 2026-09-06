@@ -1,10 +1,10 @@
 [project]
-name = "leap-finetune-rocm-env"
+name = "liquid-finetune-rocm-env"
 version = "0.1.0"
-description = "ROCm install profile for leap-finetune."
+description = "ROCm install profile for liquid-finetune."
 requires-python = ">=3.12"
 dependencies = [
-    "leap-finetune",
+    "liquid-finetune",
 ]
 
 [tool.uv]
@@ -24,7 +24,7 @@ override-dependencies = [
 ]
 
 [tool.uv.sources]
-leap-finetune = { path = "../..", editable = true }
+liquid-finetune = { path = "../..", editable = true }
 
 [dependency-groups]
 dev = [

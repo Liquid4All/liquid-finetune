@@ -4,9 +4,9 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 
-from leap_finetune.training.moe_sft import LFMMoeSFTTrainer
-from leap_finetune.training.utils.trainer_mixins import RayDataLoaderMixin
-from leap_finetune.training.moe_utils import ep_runtime as moe_ep_module
+from liquid_finetune.training.moe_sft import LFMMoeSFTTrainer
+from liquid_finetune.training.utils.trainer_mixins import RayDataLoaderMixin
+from liquid_finetune.training.moe_utils import ep_runtime as moe_ep_module
 
 
 class LengthDataset(Dataset):

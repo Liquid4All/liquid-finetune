@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from leap_finetune.rl.rewards import Recipe
+from liquid_finetune.rl.rewards import Recipe
 
 _ANSWER_COLON = re.compile(
     r"[Aa]nswer(?:\s+is)?\**\s*[:\-]?\s*\**\s*\(?([A-J])\)?",

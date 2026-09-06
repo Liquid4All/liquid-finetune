@@ -15,13 +15,13 @@ class TestStrictParser:
     """
 
     def test_rejects_out_of_range_coords(self):
-        from leap_finetune.evaluation.metrics import _parse_bboxes
+        from liquid_finetune.evaluation.metrics import _parse_bboxes
 
         assert _parse_bboxes('[{"label":"x","bbox":[0,0,1,1.5]}]') == []
         assert _parse_bboxes('[{"label":"x","bbox":[-0.1,0,1,1]}]') == []
 
     def test_rejects_zero_or_inverted_area(self):
-        from leap_finetune.evaluation.metrics import _parse_bboxes
+        from liquid_finetune.evaluation.metrics import _parse_bboxes
 
         assert _parse_bboxes('[{"label":"x","bbox":[0.5,0,0.5,1]}]') == []  # x2==x1
         assert _parse_bboxes('[{"label":"x","bbox":[1,0,0,1]}]') == []  # x2<x1
@@ -48,7 +48,7 @@ class TestHungarianMatching:
         """
         pytest.importorskip("scipy")
 
-        from leap_finetune.evaluation import metrics
+        from liquid_finetune.evaluation import metrics
 
         sim_values = iter([1.0, 0.9, 0.9, 0.1])  # row-major: (0,0),(0,1),(1,0),(1,1)
         monkeypatch.setattr(metrics, "_compute_iou", lambda a, b: next(sim_values))
@@ -64,19 +64,19 @@ class TestGroundingIouF1:
     """Multi-bbox F1 metric — the new contract used by mgrounding_test."""
 
     def test_empty_pred_empty_gt_is_one(self):
-        from leap_finetune.evaluation.metrics import score_grounding_iou_f1
+        from liquid_finetune.evaluation.metrics import score_grounding_iou_f1
 
         # Correct abstention: model emits no boxes when GT has no boxes.
         assert score_grounding_iou_f1("[]", "[]") == 1.0
 
     def test_empty_pred_nonempty_gt_is_zero(self):
-        from leap_finetune.evaluation.metrics import score_grounding_iou_f1
+        from liquid_finetune.evaluation.metrics import score_grounding_iou_f1
 
         assert score_grounding_iou_f1("[]", '[{"label":"x","bbox":[0,0,1,1]}]') == 0.0
 
     def test_multi_permuted_still_matches(self):
         """Hungarian matching is order-invariant."""
-        from leap_finetune.evaluation.metrics import score_grounding_iou_f1
+        from liquid_finetune.evaluation.metrics import score_grounding_iou_f1
 
         s = score_grounding_iou_f1(
             '[{"label":"b","bbox":[0.5,0.5,1,1]},{"label":"a","bbox":[0,0,0.5,0.5]}]',
@@ -86,7 +86,7 @@ class TestGroundingIouF1:
 
     def test_extra_pred_drags_precision(self):
         """2 preds vs 1 gt, one matches perfectly → F1=2/3."""
-        from leap_finetune.evaluation.metrics import score_grounding_iou_f1
+        from liquid_finetune.evaluation.metrics import score_grounding_iou_f1
 
         s = score_grounding_iou_f1(
             '[{"label":"a","bbox":[0,0,0.5,0.5]},{"label":"b","bbox":[0.6,0.6,1,1]}]',
@@ -95,7 +95,7 @@ class TestGroundingIouF1:
         assert s == pytest.approx(2 / 3, abs=1e-6)
 
     def test_registered_in_dispatch(self):
-        from leap_finetune.evaluation.metrics import compute_metric
+        from liquid_finetune.evaluation.metrics import compute_metric
 
         s = compute_metric(
             "grounding_iou_f1",
@@ -112,12 +112,12 @@ class TestGroundingIouLegacyFormats:
     """
 
     def test_accepts_bare_4_list(self):
-        from leap_finetune.evaluation.metrics import score_grounding_iou
+        from liquid_finetune.evaluation.metrics import score_grounding_iou
 
         assert score_grounding_iou("[0, 0, 1, 1]", "[0, 0, 1, 1]") == 1.0
 
     def test_accepts_prose_embedded_json(self):
-        from leap_finetune.evaluation.metrics import score_grounding_iou
+        from liquid_finetune.evaluation.metrics import score_grounding_iou
 
         assert (
             score_grounding_iou("Sure! The bbox is [0, 0, 1, 1].", "[0, 0, 1, 1]")
@@ -126,7 +126,7 @@ class TestGroundingIouLegacyFormats:
 
     def test_rescales_0_1000_coords(self):
         """MGrounding-native 0-1000 coord space auto-scales to 0-1."""
-        from leap_finetune.evaluation.metrics import score_grounding_iou
+        from liquid_finetune.evaluation.metrics import score_grounding_iou
 
         assert score_grounding_iou("[0, 0, 1000, 1000]", "[0, 0, 1, 1]") == 1.0
 
@@ -144,7 +144,7 @@ class TestGroundingIouMalformedDoesNotInflate:
         into 0.0/1.0 and a JSON-bool prediction would score IoU=1.0 against
         a full-image GT — a free perfect score from gibberish output.
         """
-        from leap_finetune.evaluation.metrics import _parse_bbox, score_grounding_iou
+        from liquid_finetune.evaluation.metrics import _parse_bbox, score_grounding_iou
 
         assert _parse_bbox("[false, false, true, true]") is None
         assert score_grounding_iou("[false, false, true, true]", "[0, 0, 1, 1]") == 0.0
@@ -152,7 +152,7 @@ class TestGroundingIouMalformedDoesNotInflate:
     def test_garbage_input_never_raises(self):
         """Pathological strings must return None, never raise — a raised
         exception would drop the sample from the count and inflate."""
-        from leap_finetune.evaluation.metrics import _parse_bbox
+        from liquid_finetune.evaluation.metrics import _parse_bbox
 
         for junk in [
             "",
@@ -173,7 +173,7 @@ class TestHungarianFallback:
     def test_greedy_fallback_when_scipy_missing(self, monkeypatch):
         import builtins
 
-        from leap_finetune.evaluation.metrics import _hungarian_match_iou
+        from liquid_finetune.evaluation.metrics import _hungarian_match_iou
 
         real_import = builtins.__import__
 

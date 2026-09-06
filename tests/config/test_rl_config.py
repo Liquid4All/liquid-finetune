@@ -4,13 +4,13 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from leap_finetune.config import materialize_job_config, parse_job_config
-from leap_finetune.data_loading.validate_dataset_format import (
+from liquid_finetune.config import materialize_job_config, parse_job_config
+from liquid_finetune.data_loading.validate_dataset_format import (
     get_row_filter,
     normalize_columns,
 )
-from leap_finetune.rl.rewards import resolve_reward_specs
-from leap_finetune.training.default_configs import TRAINING_DEFAULTS
+from liquid_finetune.rl.rewards import resolve_reward_specs
+from liquid_finetune.training.default_configs import TRAINING_DEFAULTS
 
 from conftest import write_config
 

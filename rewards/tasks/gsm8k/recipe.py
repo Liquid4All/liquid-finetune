@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from leap_finetune.rl.rewards import Recipe
+from liquid_finetune.rl.rewards import Recipe
 
 _GSM8K_MARKER = re.compile(r"####\s*([\-\+]?[\d,\.]+)")
 _ANY_NUMBER = re.compile(r"([\-\+]?[\d,\.]+)")

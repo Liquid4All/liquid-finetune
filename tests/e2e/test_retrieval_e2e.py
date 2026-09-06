@@ -52,7 +52,7 @@ def test_single_gpu_retrieval_training_improves(kind, e2e_output_dir):
 @pytest.mark.parametrize("kind", ["embedding", "colbert"])
 @requires_multi_gpu
 def test_multi_gpu_retrieval_training_improves(kind, e2e_output_dir, monkeypatch):
-    monkeypatch.setenv("LEAP_NUM_WORKERS", "2")
+    monkeypatch.setenv("LIQUID_NUM_WORKERS", "2")
     result = run_e2e_training(str(FIXTURES / f"e2e_{kind}.yaml"), e2e_output_dir)
     _assert_retrieval_improved(result)
     _assert_checkpoint_reloads(kind, e2e_output_dir)

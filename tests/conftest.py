@@ -8,7 +8,7 @@ import pytest
 import torch
 import yaml
 
-from leap_finetune import LEAP_FINETUNE_DIR
+from liquid_finetune import LIQUID_FINETUNE_DIR
 
 # === Ray temp dir ===
 _RAY_TMPDIR = pathlib.Path(f"/tmp/{os.environ.get('USER', 'default')}/ray")
@@ -17,7 +17,7 @@ os.environ.setdefault("RAY_TMPDIR", str(_RAY_TMPDIR))
 
 # === E2E test output dir ===
 
-_DEFAULT_TEST_RESULTS_DIR = LEAP_FINETUNE_DIR / ".test-results" / "e2e"
+_DEFAULT_TEST_RESULTS_DIR = LIQUID_FINETUNE_DIR / ".test-results" / "e2e"
 
 
 def _e2e_test_results_dir() -> pathlib.Path:
@@ -87,7 +87,7 @@ requires_single_gpu = pytest.mark.skipif(
 
 @pytest.fixture
 def job_configs_dir():
-    return LEAP_FINETUNE_DIR / "job_configs"
+    return LIQUID_FINETUNE_DIR / "job_configs"
 
 
 @pytest.fixture
@@ -162,8 +162,8 @@ def run_local_e2e_training(
     previous_output_dir = os.environ.get("OUTPUT_DIR")
     os.environ["OUTPUT_DIR"] = str(output_dir)
     try:
-        from leap_finetune.config.parser import materialize_job_config, parse_job_config
-        from leap_finetune.distribution.local_trainer import (
+        from liquid_finetune.config.parser import materialize_job_config, parse_job_config
+        from liquid_finetune.distribution.local_trainer import (
             local_trainer,
             should_use_local,
         )
@@ -191,7 +191,7 @@ def run_e2e_training(config_path: str, output_dir: pathlib.Path):
     previous_output_dir = os.environ.get("OUTPUT_DIR")
     os.environ["OUTPUT_DIR"] = str(output_dir)
     try:
-        from leap_finetune.cli.main import run_config
+        from liquid_finetune.cli.main import run_config
 
         return run_config(config_path)
     finally:

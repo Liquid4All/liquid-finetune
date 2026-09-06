@@ -9,7 +9,7 @@ usage() {
 Usage: tests/e2e/slurm/submit_e2e_tests.sh [--dry-run]
 
 Environment overrides:
-  JOB_NAME                 SLURM job name (default: leap_e2e_tests)
+  JOB_NAME                 SLURM job name (default: liquid_e2e_tests)
   PARTITION                Optional SLURM partition
   NODES                    Number of nodes (default: 1)
   GPUS_PER_TASK            GPUs in the allocation (default: 4)
@@ -44,7 +44,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SLURM_DIR="${ROOT_DIR}/tests/e2e/slurm/generated"
 SCRIPT_PATH="${SLURM_DIR}/e2e_tests.sh"
 
-JOB_NAME="${JOB_NAME:-leap_e2e_tests}"
+JOB_NAME="${JOB_NAME:-liquid_e2e_tests}"
 PARTITION="${PARTITION:-}"
 NODES="${NODES:-1}"
 GPUS_PER_TASK="${GPUS_PER_TASK:-4}"
@@ -93,7 +93,7 @@ if [[ ! -f "\${VENV_ACTIVATE}" ]]; then
 fi
 source "\${VENV_ACTIVATE}"
 
-export TMPDIR=${TMP_ROOT}/leap-e2e-\${SLURM_JOB_ID:-manual}
+export TMPDIR=${TMP_ROOT}/liquid-e2e-\${SLURM_JOB_ID:-manual}
 mkdir -p "\${TMPDIR}"
 if python - <<'PY' >/dev/null 2>&1
 import sys

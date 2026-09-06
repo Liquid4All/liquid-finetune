@@ -45,14 +45,14 @@ environment and can require runtime selection:
 
 ```bash
 uv sync
-uv run leap-finetune env fa2-status --require
+uv run liquid-finetune env fa2-status --require
 ```
 
 For ROCm:
 
 ```bash
 UV_PROJECT=envs/rocm uv sync
-UV_PROJECT=envs/rocm uv run leap-finetune env fa2-status --require
+UV_PROJECT=envs/rocm uv run liquid-finetune env fa2-status --require
 ```
 
 ## SLURM
