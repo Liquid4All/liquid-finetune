@@ -68,12 +68,11 @@ Loading without a `qat:` training option produces the normal floating-point
 model.
 
 GGUF QAT leaves tied token embeddings/output heads floating point. Preserve that
-contract during Q4_0/Q8_0 export:
+contract during Q4_0/Q8_0 export. The exporter stages quantized formats through
+F32 so FP32 QAT updates reach llama.cpp unchanged; the temporary F32 GGUF is
+removed after quantization.
 
 ```bash
-The exporter stages quantized formats through F32 so FP32 QAT updates reach
-llama.cpp unchanged; the temporary F32 GGUF is removed after quantization.
-
 leap-export-gguf CHECKPOINT --quant Q4_0 --token-embedding-type F16 \
   --llama-cpp-dir LLAMA_CPP_DIR
 ```
