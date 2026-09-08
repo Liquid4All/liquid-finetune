@@ -122,7 +122,12 @@ def grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> No
     training_args = GRPOConfig(**config_kwargs)
 
     model, tokenizer = load_model(model_name)
-    prepare_model_for_qat(model, train_config, resume_from_checkpoint=resume_from)
+    prepare_model_for_qat(
+        model,
+        train_config,
+        uses_peft=bool(peft_config or adapter_path),
+        resume_from_checkpoint=resume_from,
+    )
     # GRPO requires left-padded prompts so generated completions append cleanly.
     tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:

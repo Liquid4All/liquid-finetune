@@ -8,6 +8,7 @@ import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from peft import LoraConfig, get_peft_model
 
 from leap_finetune.config.job_config import JobConfig
 from leap_finetune.quantization.gguf_export import GGUF_DIR
@@ -207,10 +208,6 @@ def test_full_finetune_promotes_only_qat_weights_to_float32():
         },
         {
             "qat": {"type": "gguf_q4_0"},
-            "peft_config": object(),
-        },
-        {
-            "qat": {"type": "gguf_q4_0"},
             "adapter_path": "adapter",
         },
     ],
@@ -221,6 +218,20 @@ def test_qat_preserves_model_precision_when_requested_or_base_is_frozen(
     model = _DenseModel().bfloat16()
 
     report = prepare_model_for_qat(model, train_config)
+
+    assert report is not None
+    assert report.float32_parameters == []
+    assert model.proj.weight.dtype == torch.bfloat16
+
+
+def test_qat_preserves_model_precision_for_runtime_peft_flag():
+    model = _DenseModel().bfloat16()
+
+    report = prepare_model_for_qat(
+        model,
+        {"qat": {"type": "gguf_q4_0"}},
+        uses_peft=True,
+    )
 
     assert report is not None
     assert report.float32_parameters == []
@@ -453,6 +464,58 @@ def test_peft_style_wrapper_quantizes_input_once_for_base_and_adapter():
     model(value)
     torch.testing.assert_close(model.proj.adapter_input, expected)
     assert model.proj.base_layer._leap_qat_quantize_activation is False
+
+
+def test_real_peft_lora_shares_quantized_activation_and_freezes_base_weight():
+    model = _DenseModel().bfloat16()
+    prepare_model_for_qat(
+        model,
+        {"qat": {"type": "gguf_q4_0"}},
+        uses_peft=True,
+    )
+    model = get_peft_model(
+        model,
+        LoraConfig(
+            r=2,
+            lora_alpha=2,
+            lora_dropout=0.0,
+            target_modules=["proj"],
+        ),
+    )
+    finalize_qat_after_peft(model)
+    layer = model.base_model.model.proj
+    observed = {}
+
+    def capture_input(name):
+        def hook(_module, args):
+            observed[name] = args[0].detach().clone()
+
+        return hook
+
+    base_handle = layer.base_layer.register_forward_pre_hook(capture_input("base"))
+    adapter_handle = layer.lora_A["default"].register_forward_pre_hook(
+        capture_input("adapter")
+    )
+
+    value = torch.randn(2, 32, dtype=torch.bfloat16)
+    output = model(value)
+    base_handle.remove()
+    adapter_handle.remove()
+
+    expected = q8_0(value)
+    torch.testing.assert_close(observed["base"], expected)
+    # PEFT casts the shared input to the LoRA weight dtype before lora_A.
+    torch.testing.assert_close(observed["adapter"], expected.float())
+    assert layer.base_layer._leap_qat_quantize_activation is False
+    assert layer.base_layer.weight.dtype == torch.bfloat16
+    assert not layer.base_layer.weight.requires_grad
+    assert layer.lora_A["default"].weight.requires_grad
+    assert layer.lora_B["default"].weight.requires_grad
+
+    output.float().sum().backward()
+    assert layer.base_layer.weight.grad is None
+    assert layer.lora_A["default"].weight.grad is not None
+    assert layer.lora_B["default"].weight.grad is not None
 
 
 def test_peft_style_wrapper_can_disable_weight_and_shared_activation_qat():

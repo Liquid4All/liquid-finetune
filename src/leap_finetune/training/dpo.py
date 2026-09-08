@@ -108,7 +108,12 @@ def dpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> Non
         model_name=model_name,
         train_config=train_config,
     )
-    prepare_model_for_qat(model, train_config, resume_from_checkpoint=resume_from)
+    prepare_model_for_qat(
+        model,
+        train_config,
+        uses_peft=bool(peft_config or adapter_path),
+        resume_from_checkpoint=resume_from,
+    )
     ref_model = prepare_dpo_reference_model(
         train_config,
         policy_uses_peft=bool(peft_config or adapter_path),
