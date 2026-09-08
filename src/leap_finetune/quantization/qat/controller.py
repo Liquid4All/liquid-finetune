@@ -202,6 +202,7 @@ def prepare_model_for_qat(
     train_config: dict[str, Any],
     *,
     is_vlm: bool = False,
+    uses_peft: bool = False,
     resume_from_checkpoint: str | None = None,
 ) -> QATPreparationReport | None:
     raw_config = train_config.get("qat")
@@ -258,9 +259,7 @@ def prepare_model_for_qat(
             f"QAT profile {profile.name!r} matched no supported model tensors"
         )
     parameter_precision = config.get("parameter_precision", "auto")
-    uses_peft = bool(
-        train_config.get("peft_config") or train_config.get("adapter_path")
-    )
+    uses_peft = uses_peft or bool(train_config.get("adapter_path"))
     promote_parameters = parameter_precision == "float32" or (
         parameter_precision == "auto" and not uses_peft
     )

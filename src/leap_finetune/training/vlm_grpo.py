@@ -184,7 +184,11 @@ def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -
         do_image_splitting=do_image_splitting,
     )
     prepare_model_for_qat(
-        model, train_config, is_vlm=True, resume_from_checkpoint=resume_from
+        model,
+        train_config,
+        is_vlm=True,
+        uses_peft=bool(peft_config),
+        resume_from_checkpoint=resume_from,
     )
     # GRPO appends completions to prompts, so left padding keeps positions sane.
     if hasattr(processor, "tokenizer") and processor.tokenizer is not None:
