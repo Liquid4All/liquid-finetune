@@ -96,27 +96,33 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
         before delegating to TRL.
         """
         patched_prompts = []
-        for prompt in prompts:
-            new_prompt = []
-            for message in prompt:
-                content = message.get("content")
-                if isinstance(content, list):
-                    new_content = []
-                    for part in content:
-                        if (
-                            isinstance(part, dict)
-                            and part.get("type") == "image"
-                            and isinstance(part.get("image"), str)
-                        ):
-                            img = load_image(part["image"])
-                            new_content.append({"type": "image", "image": img})
-                        else:
-                            new_content.append(part)
-                    new_prompt.append({**message, "content": new_content})
-                else:
-                    new_prompt.append(message)
-            patched_prompts.append(new_prompt)
-        return super()._tokenize_prompts(patched_prompts)
+        loaded_images = []
+        try:
+            for prompt in prompts:
+                new_prompt = []
+                for message in prompt:
+                    content = message.get("content")
+                    if isinstance(content, list):
+                        new_content = []
+                        for part in content:
+                            if (
+                                isinstance(part, dict)
+                                and part.get("type") == "image"
+                                and isinstance(part.get("image"), str)
+                            ):
+                                img = load_image(part["image"])
+                                loaded_images.append(img)
+                                new_content.append({"type": "image", "image": img})
+                            else:
+                                new_content.append(part)
+                        new_prompt.append({**message, "content": new_content})
+                    else:
+                        new_prompt.append(message)
+                patched_prompts.append(new_prompt)
+            return super()._tokenize_prompts(patched_prompts)
+        finally:
+            for image in loaded_images:
+                image.close()
 
 
 def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> None:
