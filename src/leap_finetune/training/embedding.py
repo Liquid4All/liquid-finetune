@@ -1,6 +1,8 @@
 import logging
 from typing import assert_never, cast
 
+from leap_finetune.distribution.ray_runtime import normalize_visible_devices  # noqa: F401
+
 from ray.train.huggingface.transformers import prepare_trainer
 from sentence_transformers import SentenceTransformer, SentenceTransformerTrainer
 from sentence_transformers.evaluation import (

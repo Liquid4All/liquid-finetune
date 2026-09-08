@@ -1,6 +1,8 @@
 import logging
 from typing import cast
 
+from leap_finetune.distribution.ray_runtime import normalize_visible_devices  # noqa: F401
+
 from ray.train.huggingface.transformers import prepare_trainer
 from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizerBase

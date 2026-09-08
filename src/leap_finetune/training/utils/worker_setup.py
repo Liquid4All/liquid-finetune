@@ -1,5 +1,7 @@
 import os
 
+import leap_finetune.distribution.ray_runtime  # noqa: F401
+
 import ray.train
 import torch
 from ray.train.torch import get_device as get_ray_torch_device

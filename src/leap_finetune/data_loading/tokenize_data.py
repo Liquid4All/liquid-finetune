@@ -1,6 +1,8 @@
 import copy
 import logging
 
+from leap_finetune.distribution.ray_runtime import normalize_visible_devices  # noqa: F401
+
 import ray
 import ray.data
 import torch

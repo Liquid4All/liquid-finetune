@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from leap_finetune.distribution.ray_runtime import normalize_visible_devices  # noqa: F401
+
 from ray import train
 from transformers import TrainingArguments
 from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState

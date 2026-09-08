@@ -65,6 +65,7 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
         super().__init__(**kwargs)
         self.lr_multipliers = lr_multipliers or DEFAULT_LR_MULTIPLIERS
         self._optimizer_group_names: list[str] = []
+        self._vlm_grpo_loaded_images = []
 
     def create_optimizer(self):
         if self.optimizer is not None:
@@ -96,33 +97,36 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
         before delegating to TRL.
         """
         patched_prompts = []
-        loaded_images = []
+        for prompt in prompts:
+            new_prompt = []
+            for message in prompt:
+                content = message.get("content")
+                if isinstance(content, list):
+                    new_content = []
+                    for part in content:
+                        if (
+                            isinstance(part, dict)
+                            and part.get("type") == "image"
+                            and isinstance(part.get("image"), str)
+                        ):
+                            img = load_image(part["image"])
+                            self._vlm_grpo_loaded_images.append(img)
+                            new_content.append({"type": "image", "image": img})
+                        else:
+                            new_content.append(part)
+                    new_prompt.append({**message, "content": new_content})
+                else:
+                    new_prompt.append(message)
+            patched_prompts.append(new_prompt)
+        return super()._tokenize_prompts(patched_prompts)
+
+    def _generate_and_score_completions(self, inputs):
         try:
-            for prompt in prompts:
-                new_prompt = []
-                for message in prompt:
-                    content = message.get("content")
-                    if isinstance(content, list):
-                        new_content = []
-                        for part in content:
-                            if (
-                                isinstance(part, dict)
-                                and part.get("type") == "image"
-                                and isinstance(part.get("image"), str)
-                            ):
-                                img = load_image(part["image"])
-                                loaded_images.append(img)
-                                new_content.append({"type": "image", "image": img})
-                            else:
-                                new_content.append(part)
-                        new_prompt.append({**message, "content": new_content})
-                    else:
-                        new_prompt.append(message)
-                patched_prompts.append(new_prompt)
-            return super()._tokenize_prompts(patched_prompts)
+            return super()._generate_and_score_completions(inputs)
         finally:
-            for image in loaded_images:
+            for image in self._vlm_grpo_loaded_images:
                 image.close()
+            self._vlm_grpo_loaded_images.clear()
 
 
 def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> None:
