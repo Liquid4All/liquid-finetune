@@ -40,6 +40,15 @@ def _get_attn_implementation() -> str:
     return "sdpa"
 
 
+def _get_vlm_attn_implementation() -> dict[str, str]:
+    """Use FA2 for LFM text attention while keeping SigLIP2 on SDPA."""
+    return {
+        "": "sdpa",
+        "text_config": _get_attn_implementation(),
+        "vision_config": "sdpa",
+    }
+
+
 def _requires_flash_attn_2() -> bool:
     return os.getenv("LEAP_REQUIRE_FLASH_ATTN_2", "").lower() in _TRUE_VALUES
 
@@ -316,12 +325,13 @@ def load_vlm_model(
     model_id = _resolve_model_id(model_name)
     logger.info(f"Loading VLM: {model_id}")
 
-    # SigLIP2 vision encoder doesn't support FA2, use SDPA for the full VLM
+    # SigLIP2 does not support FA2. Transformers dispatches this mapping to the
+    # submodels, allowing the LFM language backbone to use FA2 independently.
     model = AutoModelForImageTextToText.from_pretrained(
         model_id,
         dtype=torch.bfloat16,
         trust_remote_code=True,
-        attn_implementation="sdpa",
+        attn_implementation=_get_vlm_attn_implementation(),
     )
     processor = AutoProcessor.from_pretrained(model_id, **processor_kwargs)
 
