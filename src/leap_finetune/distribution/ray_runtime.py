@@ -370,6 +370,7 @@ def resolve_local_object_store_memory() -> int:
     os.environ.setdefault("RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE", "1")
     return min(target, 2 * 1024**3)
 
+
 # Ray's AMD accelerator manager rejects ROCR_VISIBLE_DEVICES during import.
 # Normalize it as soon as this dependency-free runtime module is imported so
 # all Ray-backed modules can safely import Ray afterwards.
