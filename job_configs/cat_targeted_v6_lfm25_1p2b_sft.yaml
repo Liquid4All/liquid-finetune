@@ -1,0 +1,52 @@
+project_name: "cat_targeted_v6_lfm25_1p2b_sft"
+model_name: "LFM2.5-1.2B-Base"
+training_type: "sft"
+
+dataset:
+  train_path: "/home/alay.shah@liquid.ai/intents/outputs/caterpillar-targeted-v6-200k/train.parquet"
+  val_path: "/home/alay.shah@liquid.ai/intents/outputs/caterpillar-targeted-v6-200k/eval.parquet"
+  type: "sft"
+
+training_config:
+  num_train_epochs: 3
+  per_device_train_batch_size: 16
+  gradient_accumulation_steps: 2
+  learning_rate: 1e-5
+  lr_scheduler_type: "warmup_stable_decay"
+  warmup_ratio: 0.0
+  warmup_steps: 40
+  lr_scheduler_kwargs:
+    num_decay_steps: 1564
+    decay_type: "cosine"
+    min_lr_ratio: 0.1
+  bf16: true
+  gradient_checkpointing: true
+  max_grad_norm: 1.0
+  max_length: 512
+  packing: false
+  assistant_only_loss: true
+  eval_strategy: "epoch"
+  save_strategy: "epoch"
+  logging_steps: 10
+
+peft_config:
+  use_peft: false
+
+ray:
+  num_workers: 8
+  resources_per_worker:
+    GPU: 1
+
+slurm:
+  job_name: "cat_targeted_v6_1p2b"
+  nodes: 1
+  ntasks_per_node: 1
+  gpus_per_task: 8
+  cpus_per_gpu: 14
+  directives:
+    - "--time=06:00:00"
+  output: "/home/alay.shah@liquid.ai/checkpoints/leap-finetune/cat_targeted_v6_lfm25_1p2b_sft/logs/OUT_%x.%j"
+  error: "/home/alay.shah@liquid.ai/checkpoints/leap-finetune/cat_targeted_v6_lfm25_1p2b_sft/logs/ERR_%x.%j"
+  setup_commands:
+    - "export HF_HOME=/home/alay.shah@liquid.ai/.cache/huggingface"
+    - "export OUTPUT_DIR=/home/alay.shah@liquid.ai/checkpoints/leap-finetune/cat_targeted_v6_lfm25_1p2b_sft"

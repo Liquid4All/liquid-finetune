@@ -1,13 +1,27 @@
 import math
+import pathlib
 
 import pytest
 from pylate import models
+import yaml
 from sentence_transformers import SentenceTransformer
 
 from conftest import requires_gpu, requires_multi_gpu, run_e2e_training
 
 pytestmark = pytest.mark.retrieval
-FIXTURES = __import__("pathlib").Path(__file__).parent / "fixtures"
+FIXTURES = pathlib.Path(__file__).parent / "fixtures"
+
+
+def _local_retrieval_config(kind, tmp_path):
+    """Use a synchronous copy; the shipped configs are SLURM launch configs."""
+    config = yaml.safe_load((FIXTURES / f"e2e_{kind}.yaml").read_text())
+    dataset_path = pathlib.Path(config["dataset"]["path"])
+    if not dataset_path.is_absolute():
+        config["dataset"]["path"] = str((FIXTURES / dataset_path).resolve())
+    config.pop("slurm", None)
+    config_path = tmp_path / f"e2e_{kind}_local.yaml"
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+    return config_path
 
 
 def _assert_retrieval_improved(result):
@@ -43,16 +57,20 @@ def _assert_checkpoint_reloads(kind, output_dir):
 
 @pytest.mark.parametrize("kind", ["embedding", "colbert"])
 @requires_gpu
-def test_single_gpu_retrieval_training_improves(kind, e2e_output_dir):
-    result = run_e2e_training(str(FIXTURES / f"e2e_{kind}.yaml"), e2e_output_dir)
+def test_single_gpu_retrieval_training_improves(kind, e2e_output_dir, tmp_path):
+    config_path = _local_retrieval_config(kind, tmp_path)
+    result = run_e2e_training(str(config_path), e2e_output_dir)
     _assert_retrieval_improved(result)
     _assert_checkpoint_reloads(kind, e2e_output_dir)
 
 
 @pytest.mark.parametrize("kind", ["embedding", "colbert"])
 @requires_multi_gpu
-def test_multi_gpu_retrieval_training_improves(kind, e2e_output_dir, monkeypatch):
+def test_multi_gpu_retrieval_training_improves(
+    kind, e2e_output_dir, monkeypatch, tmp_path
+):
     monkeypatch.setenv("LEAP_NUM_WORKERS", "2")
-    result = run_e2e_training(str(FIXTURES / f"e2e_{kind}.yaml"), e2e_output_dir)
+    config_path = _local_retrieval_config(kind, tmp_path)
+    result = run_e2e_training(str(config_path), e2e_output_dir)
     _assert_retrieval_improved(result)
     _assert_checkpoint_reloads(kind, e2e_output_dir)

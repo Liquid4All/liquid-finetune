@@ -1,6 +1,20 @@
 import os
 from pathlib import Path
 
+from leap_finetune.distribution.ray_runtime import (
+    build_scaling_config,
+    get_ray_env_vars,
+    get_requested_ray_address,
+    normalize_uv_project_path,
+    normalize_visible_devices,
+    resolve_local_ray_num_cpus,
+    resolve_local_object_store_memory,
+    resolve_num_workers,
+    select_object_spilling_dir,
+    select_ray_temp_dir,
+    worker_process_setup_hook,
+)
+
 import ray
 import ray.data
 from accelerate.utils import set_seed
@@ -18,19 +32,6 @@ from leap_finetune.data_loading.ray_data_utils import create_ray_datasets
 from leap_finetune.distribution.data_sharding import ExpertParallelDataConfig
 from leap_finetune.distribution.distributed_configs import (
     strip_distributed_training_config,
-)
-from leap_finetune.distribution.ray_runtime import (
-    build_scaling_config,
-    get_ray_env_vars,
-    get_requested_ray_address,
-    normalize_uv_project_path,
-    normalize_visible_devices,
-    resolve_local_ray_num_cpus,
-    resolve_local_object_store_memory,
-    resolve_num_workers,
-    select_object_spilling_dir,
-    select_ray_temp_dir,
-    worker_process_setup_hook,
 )
 from leap_finetune.distribution.vllm_server import (
     launch_vllm_server,
@@ -191,6 +192,8 @@ def ray_trainer(job_config: dict) -> None:
 
             ray.init(**ray_init_kwargs)
 
+        print("[ray-trainer] Ray initialized", flush=True)
+
         # Also suppress on driver (must be after ray.init)
         worker_process_setup_hook()
 
@@ -216,6 +219,8 @@ def ray_trainer(job_config: dict) -> None:
             f"Invalid training type: {training_type}. "
             f"Available: {list(TRAINING_LOOPS.keys())}"
         )
+
+    print("[ray-trainer] Building Ray datasets", flush=True)
 
     # ==== 2. Build Ray datasets ====
     # The driver validates/tokenizes/packs text data once. Ray shards those
@@ -243,12 +248,14 @@ def ray_trainer(job_config: dict) -> None:
     elif isinstance(dataset_config, tuple):
         # Legacy path: pre-loaded (Dataset, Dataset) tuple (deprecate eventually)
         train_hf, eval_hf = dataset_config
-        train_ds = ray.data.from_huggingface(train_hf)
+        train_ds = ray.data.from_arrow(train_hf.data.table)
         datasets = {"train": train_ds}
         if eval_hf is not None:
-            datasets["eval"] = ray.data.from_huggingface(eval_hf)
+            datasets["eval"] = ray.data.from_arrow(eval_hf.data.table)
     else:
         raise ValueError(f"Invalid dataset type: {type(dataset_config)}")
+
+    print("[ray-trainer] Ray datasets ready", flush=True)
 
     # ==== 3. Configure distributed training ====
     # EP uses a custom Ray DataConfig so ranks in each EP group receive the same
@@ -357,6 +364,8 @@ def ray_trainer(job_config: dict) -> None:
         datasets=datasets,
         dataset_config=ray_dataset_config,
     )
+
+    print("[ray-trainer] TorchTrainer constructed; starting fit", flush=True)
 
     result = None
     try:

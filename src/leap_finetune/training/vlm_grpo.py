@@ -65,6 +65,7 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
         super().__init__(**kwargs)
         self.lr_multipliers = lr_multipliers or DEFAULT_LR_MULTIPLIERS
         self._optimizer_group_names: list[str] = []
+        self._vlm_grpo_loaded_images = []
 
     def create_optimizer(self):
         if self.optimizer is not None:
@@ -109,6 +110,7 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
                             and isinstance(part.get("image"), str)
                         ):
                             img = load_image(part["image"])
+                            self._vlm_grpo_loaded_images.append(img)
                             new_content.append({"type": "image", "image": img})
                         else:
                             new_content.append(part)
@@ -117,6 +119,14 @@ class LFMVLMGRPOTrainer(GRPOTrainer):
                     new_prompt.append(message)
             patched_prompts.append(new_prompt)
         return super()._tokenize_prompts(patched_prompts)
+
+    def _generate_and_score_completions(self, inputs):
+        try:
+            return super()._generate_and_score_completions(inputs)
+        finally:
+            for image in self._vlm_grpo_loaded_images:
+                image.close()
+            self._vlm_grpo_loaded_images.clear()
 
 
 def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> None:

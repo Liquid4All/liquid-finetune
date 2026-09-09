@@ -1,6 +1,8 @@
 import copy
 from typing import Dict, List, Optional
 
+from leap_finetune.distribution.ray_runtime import normalize_visible_devices  # noqa: F401
+
 from ray.actor import ActorHandle
 from ray.data import DataIterator, Dataset
 from ray.data._internal.execution.interfaces.execution_options import ExecutionResources

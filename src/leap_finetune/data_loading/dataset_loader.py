@@ -242,7 +242,7 @@ class DatasetLoader:
                 raise ValueError(f"Unsupported dataset source for path '{path}'")
             dataset = load_dataset(builder_name, data_files=path, split=split)
 
-        return ray.data.from_huggingface(dataset)
+        return ray.data.from_arrow(dataset.data.table)
 
     def load(self) -> tuple[Dataset, Dataset]:
         """Load and return validated (train, test) dataset"""
