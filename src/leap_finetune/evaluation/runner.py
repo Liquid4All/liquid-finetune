@@ -101,6 +101,31 @@ def create_vllm_backend(model_ref: str, backend_config):
         dtype=str(cfg.get("dtype", "bfloat16")),
         gpu_memory_utilization=float(cfg.get("gpu_memory_utilization", 0.9)),
         max_model_len=cfg.get("max_model_len"),
+        quantization=cfg.get("quantization"),
+    )
+
+
+def create_llama_cpp_backend(model_ref: str, backend_config):
+    from leap_finetune.evaluation.backend import LlamaCppServerBackend
+
+    cfg = (
+        backend_config.model_dump(exclude_none=True)
+        if hasattr(backend_config, "model_dump")
+        else dict(backend_config or {})
+    )
+    return LlamaCppServerBackend(
+        model_path=model_ref,
+        base_url=cfg.get("base_url"),
+        model_id=cfg.get("model_id"),
+        server_binary=str(cfg.get("server_binary", "llama-server")),
+        host=str(cfg.get("host", "127.0.0.1")),
+        port=int(cfg.get("port", 8080)),
+        n_gpu_layers=int(cfg.get("n_gpu_layers", 999)),
+        mmproj=cfg.get("mmproj"),
+        server_args=list(cfg.get("server_args", [])),
+        startup_timeout=float(cfg.get("startup_timeout", 300.0)),
+        request_timeout=float(cfg.get("request_timeout", 600.0)),
+        log_path=cfg.get("log_path"),
     )
 
 
@@ -233,6 +258,11 @@ def run_eval_config(
     elif cfg.backend.type == "vllm":
         processor = load_eval_processor(model_ref, modality=cfg.modality)
         backend = create_vllm_backend(model_ref, cfg.backend)
+    elif cfg.backend.type == "llama_cpp":
+        # Backend-driven benchmarks do not need a Transformers processor;
+        # llama-server owns chat templating and vision preprocessing.
+        processor = None
+        backend = create_llama_cpp_backend(model_ref, cfg.backend)
     else:
         raise ValueError(f"Unsupported eval backend: {cfg.backend.type!r}")
 

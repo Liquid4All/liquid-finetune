@@ -6,6 +6,8 @@ from datetime import datetime
 from peft import LoraConfig, PeftModel, get_peft_model
 from transformers import AutoTokenizer, PreTrainedModel, ProcessorMixin
 
+from leap_finetune.quantization.qat.metadata import find_qat_config, write_qat_metadata
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,6 +63,9 @@ def merge_and_save_peft_model(
 
     print(f"Merging and saving PEFT model to {peft_model_dir}")
 
+    qat_config = find_qat_config(model)
     model = model.merge_and_unload()
     model.save_pretrained(str(peft_model_dir))
     tokenizer_or_processor.save_pretrained(str(peft_model_dir))
+    if qat_config is not None:
+        write_qat_metadata(peft_model_dir, qat_config)

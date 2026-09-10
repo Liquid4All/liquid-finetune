@@ -4,6 +4,11 @@ from typing import cast
 from transformers import PreTrainedTokenizerBase
 from trl import DPOConfig, DPOTrainer
 
+from leap_finetune.quantization.qat import (
+    finalize_qat_after_peft,
+    prepare_dpo_reference_model,
+    prepare_model_for_qat,
+)
 from leap_finetune.training.utils.worker_setup import (
     default_eval_batch_size,
     resolve_train_eval_datasets,
@@ -103,17 +108,32 @@ def dpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> Non
         model_name=model_name,
         train_config=train_config,
     )
+    prepare_model_for_qat(
+        model,
+        train_config,
+        uses_peft=bool(peft_config or adapter_path),
+        resume_from_checkpoint=resume_from,
+    )
+    ref_model = prepare_dpo_reference_model(
+        train_config,
+        policy_uses_peft=bool(peft_config or adapter_path),
+        load_model=lambda: load_causal_lm_for_training(
+            training_config, model_name=model_name, train_config=train_config
+        )[0],
+    )
 
     if adapter_path:
         model = load_peft_adapter(model, adapter_path)
     elif peft_config:
         model = apply_peft_to_model(model, peft_config)
+    finalize_qat_after_peft(model)
 
     if not hasattr(model, "warnings_issued"):
         model.warnings_issued = {}
 
     trainer = LFMDPOTrainer(
         model=model,
+        ref_model=ref_model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,

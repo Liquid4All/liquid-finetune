@@ -54,6 +54,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="llama.cpp checkout containing build/bin/llama-quantize for K-quants.",
     )
+    parser.add_argument(
+        "--token-embedding-type",
+        choices=("F16", "F32", "Q8_0"),
+        default=None,
+        help=(
+            "Override token_embd.weight in llama-quantize. QAT profiles that "
+            "exclude tied embeddings should use F16."
+        ),
+    )
     return parser
 
 
@@ -85,6 +94,7 @@ def main() -> None:
         output_dir=output_dir,
         base_model_path=args.base_model_path,
         llama_cpp_dir=args.llama_cpp_dir,
+        token_embedding_type=args.token_embedding_type,
     )
 
     print("GGUF export complete:")

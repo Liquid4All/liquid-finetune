@@ -8,6 +8,11 @@ from transformers import PreTrainedTokenizerBase
 from trl import DPOConfig, DPOTrainer
 
 from leap_finetune.data_loading.length_grouping import get_length_grouped_sampler
+from leap_finetune.quantization.qat import (
+    finalize_qat_after_peft,
+    prepare_dpo_reference_model,
+    prepare_model_for_qat,
+)
 from leap_finetune.distribution.distributed_configs import (
     resolve_fsdp_cpu_offload,
     resolve_reshard_after_forward,
@@ -268,6 +273,19 @@ def moe_dpo_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
         model_name=model_name,
         train_config=train_config,
     )
+    prepare_model_for_qat(
+        model,
+        train_config,
+        uses_peft=bool(peft_config),
+        resume_from_checkpoint=resume_from,
+    )
+    ref_model = prepare_dpo_reference_model(
+        train_config,
+        policy_uses_peft=bool(peft_config),
+        load_model=lambda: load_causal_lm_for_training(
+            training_config, model_name=model_name, train_config=train_config
+        )[0],
+    )
 
     ep_config = None
     device_mesh = None
@@ -283,13 +301,19 @@ def moe_dpo_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
         ep_config, device_mesh = create_ep_mesh(ep_size, num_experts)
         shard_experts(model, ep_config)
         apply_ep_to_model(model, ep_config, moe_config=moe_config)
+        if ref_model is not None:
+            shard_experts(ref_model, ep_config)
+            apply_ep_to_model(ref_model, ep_config, moe_config=moe_config)
     else:
         apply_moe_losses(model, moe_config)
+        if ref_model is not None:
+            apply_moe_losses(ref_model, moe_config)
         if use_fsdp2:
             dp_mesh = create_dp_mesh()
 
     if peft_config:
         model = apply_peft_to_model(model, peft_config)
+    finalize_qat_after_peft(model)
 
     if use_ep and device_mesh is not None:
         # FSDP shards only over DP; EP ownership stays local to each EP rank.
@@ -322,6 +346,7 @@ def moe_dpo_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
         manual_sharded_checkpoint_format=manual_sharded_checkpoint_format,
         manual_sharded_export_metadata=manual_sharded_export_metadata,
         model=model,
+        ref_model=ref_model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,

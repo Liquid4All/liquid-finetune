@@ -45,7 +45,11 @@ def create_llm_benchmarks_from_config(
             kwargs.setdefault("max_new_tokens", default_max_new_tokens)
             result.append(
                 LLMGenerationBenchmark(
-                    name=name, path=path, tokenizer=tokenizer, **kwargs
+                    name=name,
+                    path=path,
+                    tokenizer=tokenizer,
+                    metric=metric,
+                    **kwargs,
                 )
             )
         else:
