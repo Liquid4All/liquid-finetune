@@ -6,11 +6,6 @@ import sys
 
 logger = logging.getLogger(__name__)
 
-# Bundled llama.cpp conversion scripts
-GGUF_DIR = pathlib.Path(__file__).resolve().parent / "gguf"
-BUNDLED_CONVERT_HF = GGUF_DIR / "convert_hf_to_gguf.py"
-BUNDLED_CONVERT_LORA = GGUF_DIR / "convert_lora_to_gguf.py"
-
 # === Quantization type sets ===
 
 # Types that convert_hf_to_gguf.py can produce directly via --outtype
@@ -42,21 +37,32 @@ ADAPTER_QUANTS = {"F16", "BF16", "F32", "Q8_0"}
 OUTTYPE_MAP = {"F16": "f16", "BF16": "bf16", "F32": "f32", "Q8_0": "q8_0"}
 
 
-def resolve_quantize_binary(cli_arg: str | None) -> pathlib.Path:
+def resolve_llama_cpp_dir(cli_arg: str | None) -> pathlib.Path:
     raw = cli_arg or os.environ.get("LLAMA_CPP_DIR")
     if not raw:
         raise FileNotFoundError(
-            "llama-quantize binary is required for K-quant types.\n\n"
+            "A llama.cpp checkout is required for GGUF export.\n\n"
             "Set LLAMA_CPP_DIR or use --llama-cpp-dir:\n\n"
             "  git clone https://github.com/ggml-org/llama.cpp\n"
-            "  cd llama.cpp && cmake -B build && cmake --build build --config Release\n"
             "  export LLAMA_CPP_DIR=/path/to/llama.cpp\n"
         )
 
-    llama_dir = pathlib.Path(raw).resolve()
+    llama_dir = pathlib.Path(raw).expanduser().resolve()
     if not llama_dir.is_dir():
         raise FileNotFoundError(f"llama.cpp directory does not exist: {llama_dir}")
+    return llama_dir
 
+
+def resolve_convert_script(llama_dir: pathlib.Path, name: str) -> pathlib.Path:
+    script = llama_dir / name
+    if not script.exists():
+        raise FileNotFoundError(
+            f"{name} not found in {llama_dir}. Update your llama.cpp checkout."
+        )
+    return script
+
+
+def resolve_quantize_binary(llama_dir: pathlib.Path) -> pathlib.Path:
     candidates = [
         llama_dir / "build" / "bin" / "llama-quantize",
         llama_dir / "llama-quantize",
@@ -101,11 +107,12 @@ def _run_subprocess(cmd: list[str], description: str) -> None:
 def convert_hf_to_gguf(
     model_path: pathlib.Path,
     output_path: pathlib.Path,
+    convert_script: pathlib.Path,
     outtype: str = "f16",
 ) -> pathlib.Path:
     cmd = [
         sys.executable,
-        str(BUNDLED_CONVERT_HF),
+        str(convert_script),
         str(model_path),
         "--outfile",
         str(output_path),
@@ -120,12 +127,13 @@ def convert_hf_to_gguf(
 def convert_lora_to_gguf(
     adapter_path: pathlib.Path,
     output_path: pathlib.Path,
+    convert_script: pathlib.Path,
     outtype: str = "f16",
     base_model_path: str | None = None,
 ) -> pathlib.Path:
     cmd = [
         sys.executable,
-        str(BUNDLED_CONVERT_LORA),
+        str(convert_script),
         str(adapter_path),
         "--outfile",
         str(output_path),
@@ -164,6 +172,8 @@ def export_gguf(
     adapter = is_adapter_path(model_path)
     results = []
 
+    llama_dir = resolve_llama_cpp_dir(llama_cpp_dir)
+
     if adapter:
         unsupported = set(quant_types) - ADAPTER_QUANTS
         if unsupported:
@@ -174,34 +184,39 @@ def export_gguf(
                 "then export the merged model."
             )
 
+        convert_lora = resolve_convert_script(llama_dir, "convert_lora_to_gguf.py")
         for quant in quant_types:
             outtype = OUTTYPE_MAP[quant]
             out_path = output_dir / f"{model_name}-lora-{quant}.gguf"
-            convert_lora_to_gguf(model_path, out_path, outtype, base_model_path)
+            convert_lora_to_gguf(
+                model_path, out_path, convert_lora, outtype, base_model_path
+            )
             results.append(out_path)
 
         return results
+
+    convert_hf = resolve_convert_script(llama_dir, "convert_hf_to_gguf.py")
 
     # === Full model export ===
     direct = [q for q in quant_types if q in DIRECT_QUANTS]
     needs_quantize = [q for q in quant_types if q in QUANTIZE_QUANTS]
 
-    # Direct quants (F16, BF16, F32, Q8_0) — single step via bundled script
+    # Direct quants (F16, BF16, F32, Q8_0) — single step via the convert script
     for quant in direct:
         outtype = OUTTYPE_MAP[quant]
         out_path = output_dir / f"{model_name}-{quant}.gguf"
-        convert_hf_to_gguf(model_path, out_path, outtype)
+        convert_hf_to_gguf(model_path, out_path, convert_hf, outtype)
         results.append(out_path)
 
     # Quantize quants — need F16 intermediate, then llama-quantize binary
     if needs_quantize:
-        quantize_bin = resolve_quantize_binary(llama_cpp_dir)
+        quantize_bin = resolve_quantize_binary(llama_dir)
 
         f16_requested = "F16" in direct
         f16_path = output_dir / f"{model_name}-F16.gguf"
 
         if not f16_path.exists():
-            convert_hf_to_gguf(model_path, f16_path, "f16")
+            convert_hf_to_gguf(model_path, f16_path, convert_hf, "f16")
 
         for quant in needs_quantize:
             out_path = output_dir / f"{model_name}-{quant}.gguf"
