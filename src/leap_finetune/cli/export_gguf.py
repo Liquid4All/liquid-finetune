@@ -52,7 +52,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--llama-cpp-dir",
         default=None,
-        help="llama.cpp checkout containing build/bin/llama-quantize for K-quants.",
+        help=(
+            "llama.cpp checkout providing the conversion scripts (and "
+            "build/bin/llama-quantize for K-quants). Defaults to $LLAMA_CPP_DIR."
+        ),
     )
     return parser
 

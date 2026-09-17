@@ -81,9 +81,6 @@ markers = [
 ]
 addopts = "-v --tb=short"
 
-[tool.ruff]
-exclude = ["src/leap_finetune/quantization/gguf"]
-
 [dependency-groups]
 cuda = [
     "liger-kernel>=0.6.2; sys_platform == 'linux'",
