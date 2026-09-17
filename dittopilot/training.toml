@@ -1,0 +1,46 @@
+[generic-vlm-sft-lora]
+mode = "sft"
+modality = "image"
+description = "Generic messages-JSONL VLM SFT with LoRA through leap-finetune's native vlm_sft loader."
+command = "bash dittopilot/train_vlm_sft.sh --model-path '{{checkpoint_path}}' --dataset-dir '{{dataset_path}}' --output-dir '{{output_checkpoint_path}}' --project-name '{{run_name}}' --run-name '{{training_run_id}}' --wandb-project '{{wandb_project}}' --limit {{limit}} --max-steps {{max_steps}} --batch-size {{batch_size}} --learning-rate {{learning_rate}} --warmup-ratio {{warmup_ratio}} --lora-r {{lora_r}} --lora-alpha {{lora_alpha}}"
+gpus = 1
+nodes = 1
+tasks_per_node = 1
+cpus = 12
+time = "01:00:00"
+needs_ray = false
+
+[generic-vlm-sft-lora.args.limit]
+type = "int"
+default = 32
+description = "Maximum training rows loaded for tiny-overfit/smoke execution."
+
+[generic-vlm-sft-lora.args.max_steps]
+type = "int"
+default = 50
+description = "Optimizer steps."
+
+[generic-vlm-sft-lora.args.batch_size]
+type = "int"
+default = 8
+description = "Per-device training and evaluation batch size."
+
+[generic-vlm-sft-lora.args.learning_rate]
+type = "float"
+default = 0.001
+description = "Peak learning rate."
+
+[generic-vlm-sft-lora.args.warmup_ratio]
+type = "float"
+default = 0.1
+description = "Warmup fraction."
+
+[generic-vlm-sft-lora.args.lora_r]
+type = "int"
+default = 64
+description = "LoRA rank."
+
+[generic-vlm-sft-lora.args.lora_alpha]
+type = "int"
+default = 32
+description = "LoRA alpha."
