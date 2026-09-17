@@ -81,6 +81,7 @@ DEFAULT_VLM_GRPO = {
     # when the YAML sets training_type: vlm_grpo.
     "training_type": "vlm_grpo",
     # VLM-specific: consumed by LFMVLMGRPOTrainer, NOT passed to GRPOConfig
+    "min_image_tokens": None,
     "max_image_tokens": None,
     "do_image_splitting": True,
     "lr_multipliers": {
