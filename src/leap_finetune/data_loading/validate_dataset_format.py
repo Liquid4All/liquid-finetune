@@ -503,10 +503,31 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
 
         # === 3. Uniformize content shape ===
         # Wrap string content into list-of-parts so the column isn't mixed
-        # list/string, which Arrow can't represent downstream.
+        # list/string, which Arrow can't represent downstream. Hugging Face
+        # Arrow may also expose heterogeneous typed items as JSON strings;
+        # decode those back to the documented typed-item dictionaries.
         for message in messages:
-            if isinstance(message, dict) and isinstance(message.get("content"), str):
-                message["content"] = [{"type": "text", "text": message["content"]}]
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if isinstance(content, np.ndarray):
+                content = content.tolist()
+                message["content"] = content
+            if isinstance(content, str):
+                message["content"] = [{"type": "text", "text": content}]
+                continue
+            if isinstance(content, list):
+                normalized_content = []
+                for item in content:
+                    if isinstance(item, str):
+                        try:
+                            decoded = json.loads(item)
+                        except json.JSONDecodeError:
+                            decoded = item
+                        if isinstance(decoded, dict):
+                            item = decoded
+                    normalized_content.append(item)
+                message["content"] = normalized_content
 
         # === 4. Prepend image_root to relative image paths ===
         if image_root:
