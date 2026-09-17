@@ -38,6 +38,7 @@ VLM_RUNTIME_EXCLUDED_KEYS = {
     "group_by_image_tiles",
     "lr_multipliers",
     "vision_encoder_lr_multiplier",
+    "freeze_vision_encoder",
 }
 
 

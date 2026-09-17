@@ -39,6 +39,7 @@ from leap_finetune.training.utils.trainer_lifecycle import (
 from leap_finetune.training.utils.config_filter import filter_runtime_config_kwargs
 from leap_finetune.training.utils.vlm_optimizer import (
     build_vlm_param_groups,
+    freeze_vlm_modules,
     log_per_group_lrs,
 )
 
@@ -113,6 +114,7 @@ def vlm_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
     lr_multipliers = dict(DEFAULT_LR_MULTIPLIERS)
     if "lr_multipliers" in train_config:
         lr_multipliers.update(train_config["lr_multipliers"])
+    freeze_vision_encoder = bool(train_config.get("freeze_vision_encoder", False))
     if "vision_encoder_lr_multiplier" in train_config:
         lr_multipliers["model.vision_tower"] = train_config[
             "vision_encoder_lr_multiplier"
@@ -184,6 +186,8 @@ def vlm_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
     if group_by_image_tiles:
         train_dataset = add_vlm_tile_counts(train_dataset, processor)
 
+    if freeze_vision_encoder:
+        freeze_vlm_modules(model, ["model.vision_tower"])
     if adapter_path:
         model = load_peft_adapter(model, adapter_path)
     elif peft_config:
