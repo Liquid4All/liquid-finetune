@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import pathlib
@@ -104,11 +105,22 @@ def _run_subprocess(cmd: list[str], description: str) -> None:
         raise RuntimeError(f"{description} failed (exit code {result.returncode})")
 
 
+def has_mmproj_encoder(model_path: pathlib.Path) -> bool:
+    """True for multimodal checkpoints that carry a vision/audio encoder to
+    export as a separate mmproj GGUF."""
+    config_file = model_path / "config.json"
+    if not config_file.exists():
+        return False
+    config = json.loads(config_file.read_text())
+    return "vision_config" in config or "audio_config" in config
+
+
 def convert_hf_to_gguf(
     model_path: pathlib.Path,
     output_path: pathlib.Path,
     convert_script: pathlib.Path,
     outtype: str = "f16",
+    mmproj: bool = False,
 ) -> pathlib.Path:
     cmd = [
         sys.executable,
@@ -119,7 +131,10 @@ def convert_hf_to_gguf(
         "--outtype",
         outtype,
     ]
-    _run_subprocess(cmd, f"Converting to GGUF ({outtype})")
+    if mmproj:
+        cmd.append("--mmproj")
+    what = "vision/audio projector" if mmproj else "GGUF"
+    _run_subprocess(cmd, f"Converting {what} ({outtype})")
     logger.info("Created %s (%.2f GB)", output_path, output_path.stat().st_size / 1e9)
     return output_path
 
@@ -227,5 +242,12 @@ def export_gguf(
         if not f16_requested and f16_path.exists():
             f16_path.unlink()
             logger.info("Cleaned up intermediate F16 file")
+
+    # Multimodal checkpoints need a companion mmproj GGUF (the vision/audio
+    # encoder), produced once at F16 and paired with any text quant.
+    if has_mmproj_encoder(model_path):
+        mmproj_path = output_dir / f"mmproj-{model_name}-F16.gguf"
+        convert_hf_to_gguf(model_path, mmproj_path, convert_hf, "f16", mmproj=True)
+        results.append(mmproj_path)
 
     return results
