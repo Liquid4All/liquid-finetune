@@ -2,13 +2,18 @@
 mode = "sft"
 modality = "image"
 description = "Generic messages-JSONL VLM SFT with LoRA through leap-finetune's native vlm_sft loader."
-command = "bash dittopilot/train_vlm_sft.sh --model-path '{{checkpoint_path}}' --dataset-dir '{{dataset_path}}' --output-dir '{{output_checkpoint_path}}' --project-name '{{run_name}}' --run-name '{{training_run_id}}' --wandb-project '{{wandb_project}}' --limit {{limit}} --max-steps {{max_steps}} --batch-size {{batch_size}} --learning-rate {{learning_rate}} --warmup-ratio {{warmup_ratio}} --lora-r {{lora_r}} --lora-alpha {{lora_alpha}}"
+command = "bash dittopilot/train_vlm_sft.sh --model-path '{{model_path}}' --dataset-dir '{{dataset_path}}' --output-dir '{{output_checkpoint_path}}' --project-name '{{run_name}}' --run-name '{{training_run_id}}' --wandb-project '{{wandb_project}}' --limit {{limit}} --max-steps {{max_steps}} --batch-size {{batch_size}} --learning-rate {{learning_rate}} --warmup-ratio {{warmup_ratio}} --lora-r {{lora_r}} --lora-alpha {{lora_alpha}}"
 gpus = 1
 nodes = 1
 tasks_per_node = 1
 cpus = 12
 time = "01:00:00"
 needs_ray = false
+
+[generic-vlm-sft-lora.args.model_path]
+type = "str"
+default = "/home/shared_tw/pretrained/LFM2.5-VL-450M"
+description = "Exact local base VLM checkpoint path."
 
 [generic-vlm-sft-lora.args.limit]
 type = "int"
