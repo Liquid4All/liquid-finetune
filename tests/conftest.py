@@ -41,6 +41,27 @@ def pytest_addoption(parser):
 
 
 def pytest_collection_modifyitems(config, items):
+    e2e_items = [item for item in items if _is_e2e_item(item)]
+    e2e_mode = os.environ.get("LEAP_E2E_MODE")
+    if e2e_items and len(e2e_items) > 1:
+        if not os.environ.get("SLURM_JOB_ID"):
+            raise pytest.UsageError(
+                "The E2E suite must be submitted through SLURM. Run "
+                "tests/e2e/slurm/submit_e2e_tests.sh for the full suite, or "
+                "select one individual E2E test when debugging on a local GPU."
+            )
+        if e2e_mode not in {"ray", "local"}:
+            raise pytest.UsageError(
+                "Full E2E runs must use the supplied two-job SLURM launcher. "
+                "Set LEAP_E2E_MODE through "
+                "tests/e2e/slurm/submit_e2e_tests.sh."
+            )
+
+    if e2e_mode == "ray":
+        items[:] = [item for item in items if not item.get_closest_marker("single_gpu")]
+    elif e2e_mode == "local":
+        items[:] = [item for item in items if item.get_closest_marker("single_gpu")]
+
     flag_mark_map = {
         "configs": "configs",
         "dense": "dense",
@@ -64,6 +85,23 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip)
 
 
+def _is_e2e_item(item) -> bool:
+    return pathlib.Path(str(item.fspath)).parent.name == "e2e"
+
+
+def pytest_runtest_setup(item):
+    if not item.get_closest_marker("requires_multi_gpu"):
+        return
+    if not torch.cuda.is_available():
+        pytest.skip("Requires 2+ GPUs; no GPU is available")
+    if torch.cuda.device_count() < 2:
+        pytest.fail(
+            "This E2E test requires 2+ GPUs, but only one GPU is visible. "
+            "Submit it through tests/e2e/slurm/submit_e2e_tests.sh or allocate "
+            "a multi-GPU SLURM job."
+        )
+
+
 # === Skip markers ===
 
 requires_gpu = pytest.mark.skipif(
@@ -71,10 +109,7 @@ requires_gpu = pytest.mark.skipif(
     reason="No GPU available",
 )
 
-requires_multi_gpu = pytest.mark.skipif(
-    not torch.cuda.is_available() or torch.cuda.device_count() < 2,
-    reason="Requires 2+ GPUs",
-)
+requires_multi_gpu = pytest.mark.requires_multi_gpu
 
 requires_single_gpu = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.device_count() != 1,
@@ -158,9 +193,11 @@ def e2e_output_dir():
 def run_local_e2e_training(
     config_path: str, output_dir: pathlib.Path, *, max_steps: int = 2
 ):
-    """Run a short job through the automatic local single-GPU dispatcher."""
+    """Run a short job through the explicit native local single-GPU path."""
     previous_output_dir = os.environ.get("OUTPUT_DIR")
+    previous_launcher = os.environ.get("LEAP_LAUNCHER")
     os.environ["OUTPUT_DIR"] = str(output_dir)
+    os.environ["LEAP_LAUNCHER"] = "local"
     try:
         from leap_finetune.config.parser import materialize_job_config, parse_job_config
         from leap_finetune.distribution.local_trainer import (
@@ -178,6 +215,10 @@ def run_local_e2e_training(
             os.environ.pop("OUTPUT_DIR", None)
         else:
             os.environ["OUTPUT_DIR"] = previous_output_dir
+        if previous_launcher is None:
+            os.environ.pop("LEAP_LAUNCHER", None)
+        else:
+            os.environ["LEAP_LAUNCHER"] = previous_launcher
 
 
 def assert_local_model_saved(output_dir: pathlib.Path):
@@ -187,9 +228,11 @@ def assert_local_model_saved(output_dir: pathlib.Path):
 
 
 def run_e2e_training(config_path: str, output_dir: pathlib.Path):
-    """Parse config, override output_dir, run training, return Result."""
+    """Run a normal E2E case through Ray and return its Result."""
     previous_output_dir = os.environ.get("OUTPUT_DIR")
+    previous_launcher = os.environ.get("LEAP_LAUNCHER")
     os.environ["OUTPUT_DIR"] = str(output_dir)
+    os.environ["LEAP_LAUNCHER"] = "ray"
     try:
         from leap_finetune.cli.main import run_config
 
@@ -199,6 +242,10 @@ def run_e2e_training(config_path: str, output_dir: pathlib.Path):
             os.environ.pop("OUTPUT_DIR", None)
         else:
             os.environ["OUTPUT_DIR"] = previous_output_dir
+        if previous_launcher is None:
+            os.environ.pop("LEAP_LAUNCHER", None)
+        else:
+            os.environ["LEAP_LAUNCHER"] = previous_launcher
 
 
 def assert_training_result(

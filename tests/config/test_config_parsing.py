@@ -119,6 +119,7 @@ class TestDirectPythonConfig:
 
     def test_run_config_accepts_job_model(self, monkeypatch):
         calls = {}
+        monkeypatch.setenv("LEAP_LAUNCHER", "ray")
 
         def fake_ray_trainer(job_dict):
             calls["job_dict"] = job_dict

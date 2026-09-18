@@ -177,7 +177,7 @@ def ray_trainer(job_config: dict) -> None:
 
             spill_dir = select_object_spilling_dir(ray_temp_dir)
 
-            object_store_mem = resolve_local_object_store_memory()
+            object_store_mem = resolve_local_object_store_memory(ray_temp_dir)
             ray_num_cpus = resolve_local_ray_num_cpus()
 
             ray_init_kwargs = {
