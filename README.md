@@ -211,6 +211,12 @@ one GPU is visible. Text and VLM GRPO use the native Trainer only for one-GPU
 `outputs/{project_name}/{run_name}/`. Each run gets a unique name based on the
 model, dataset, learning rate, and timestamp.
 
+Local Ray sessions size the object store from available memory and the selected
+temporary filesystem, with a conservative upper bound, and spill objects under
+the Ray temporary directory. Set `LEAP_RAY_OBJECT_STORE_MEMORY` to an explicit
+byte value only when a job needs a different bound; values below Ray's minimum
+are rejected. Slurm-managed Ray clusters configure a per-node spill directory.
+
 Useful starter configs:
 
 | Mode                    | Config                                                                                         |
@@ -1050,8 +1056,9 @@ Run the normal tests:
 uv run pytest tests/config tests/numerics -q
 ```
 
-GPU e2e tests require an appropriate GPU or cluster backend; see
-[`tests/e2e/`](./tests/e2e/) for launchers and fixtures.
+GPU E2E tests are submitted through SLURM. The supplied launcher submits a
+four-GPU Ray job and a one-GPU native-local job; individual E2E tests may be run
+directly for debugging. See [`tests/README.md`](./tests/README.md).
 
 ### Pull Requests
 
