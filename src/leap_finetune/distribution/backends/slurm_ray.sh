@@ -111,7 +111,8 @@ ray_slurm_start_cluster_bg() {
     local worker_temp_dir="${RAY_TEMP_ROOT}/${node}"
     srun --nodes=1 --ntasks=1 -w "${node}" mkdir -p "${worker_temp_dir}"
     srun --nodes=1 --ntasks=1 -w "${node}" \
-      ray start --address="${RAY_ADDRESS}" --object-spilling-directory="${worker_temp_dir}/spill" \
+      ray start --address="${RAY_ADDRESS}" --temp-dir="${worker_temp_dir}" \
+      --object-spilling-directory="${worker_temp_dir}/spill" \
       --disable-usage-stats --block &
     RAY_SLURM_PIDS+=("$!")
   done
