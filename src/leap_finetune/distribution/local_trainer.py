@@ -63,11 +63,18 @@ def should_use_local(job_config: dict) -> bool:
 
 def local_trainer(job_config: dict):
     """Run supported single-GPU trainers in the current process without Ray Train."""
+    process_group_initialized_on_entry = torch.distributed.is_initialized()
     set_seed(42)
     training_type = job_config["training_type"]
     train_config = strip_distributed_training_config(
         job_config["training_config"], num_workers=1
     )
+    # Forking DataLoader workers after CUDA/runtime threads exist can deadlock.
+    # Keep the native single-GPU path in-process; Ray workers retain their
+    # configured loaders.
+    train_config["dataloader_num_workers"] = 0
+    train_config["dataloader_persistent_workers"] = False
+    train_config.pop("dataloader_prefetch_factor", None)
     dataset_config = job_config["dataset"]
     if not isinstance(dataset_config, DatasetLoader):
         raise ValueError("Local training requires a DatasetLoader")
@@ -101,8 +108,15 @@ def local_trainer(job_config: dict):
         "config_dir": job_config.get("config_dir"),
     }
     print("\nTraining locally on 1 GPU without Ray Train")
-    return TRAINING_LOOPS[loop_type](
-        loop_config,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-    )
+    try:
+        return TRAINING_LOOPS[loop_type](
+            loop_config,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+        )
+    finally:
+        if (
+            not process_group_initialized_on_entry
+            and torch.distributed.is_initialized()
+        ):
+            torch.distributed.destroy_process_group()

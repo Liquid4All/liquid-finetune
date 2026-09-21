@@ -1,8 +1,14 @@
 import os
 import shutil
+import tempfile
 from pathlib import Path
 
 import psutil
+
+
+_MIN_RAY_OBJECT_STORE_MEMORY = 75 * 1024**2
+_DEFAULT_OBJECT_STORE_FRACTION = 0.10
+_DEFAULT_OBJECT_STORE_CAP = 1 * 1024**3
 
 
 def _is_rocm_torch() -> bool:
@@ -201,13 +207,14 @@ def select_ray_temp_dir(preferred: str | None = None) -> str:
         candidates.append(slurm_tmp)
     if preferred:
         candidates.append(preferred)
+    temp_root = Path(tempfile.gettempdir())
     home_default = str(Path.home() / "tmp-ray")
     user = os.environ.get("USER", "default")
     candidates.extend(
         [
-            f"/tmp/{user}/ray",
+            str(temp_root / user / "ray"),
             home_default,
-            "/tmp/ray",
+            str(temp_root / "ray"),
         ]
     )
 
@@ -235,7 +242,11 @@ def _slurm_ray_temp_candidate() -> str | None:
     if not job_id:
         return None
     safe_job_id = "".join(ch for ch in job_id if ch.isalnum() or ch in ("_", "-"))
-    return f"/tmp/r{safe_job_id}" if safe_job_id else None
+    if not safe_job_id:
+        return None
+    return str(
+        Path(os.environ.get("TMPDIR", tempfile.gettempdir())) / f"r{safe_job_id}"
+    )
 
 
 def _paths_with_free_space(
@@ -259,8 +270,11 @@ def select_object_spilling_dir(ray_temp_dir: str | None = None) -> str:
     """Choose a directory with enough free space for Ray object spilling."""
     home = str(Path.home())
     temp_root = ray_temp_dir or str(Path.home() / "tmp-ray")
+    system_temp = Path(tempfile.gettempdir())
+    user = os.environ.get("USER", "default")
     candidates = [
         os.path.join(temp_root, "spill"),
+        str(system_temp / user / "ray-spill"),
         os.path.join(home, "tmp-ray", "spill"),
         os.path.join(home, "ray_spill"),
     ]
@@ -353,22 +367,71 @@ def build_scaling_config(
     )
 
 
-def resolve_local_object_store_memory() -> int:
-    """Choose a local Ray object store size that respects tiny /dev/shm setups."""
-    available_mem = int(psutil.virtual_memory().available * 0.4)
-    default_cap = 8 * 1024**3
-    target = min(available_mem, default_cap)
+def _configured_object_store_memory() -> int | None:
+    raw = os.environ.get("LEAP_RAY_OBJECT_STORE_MEMORY")
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            "LEAP_RAY_OBJECT_STORE_MEMORY must be an integer number of bytes"
+        ) from exc
+    if value < _MIN_RAY_OBJECT_STORE_MEMORY:
+        raise ValueError(
+            "LEAP_RAY_OBJECT_STORE_MEMORY must be at least "
+            f"{_MIN_RAY_OBJECT_STORE_MEMORY} bytes"
+        )
+    return value
+
+
+def resolve_local_object_store_memory(ray_temp_dir: str | None = None) -> int:
+    """Choose a bounded object store size from available memory and disk space.
+
+    Ray's default uses a fraction of host memory, which can be excessive on
+    large nodes or when the process is running with a small temporary volume.
+    The explicit override is useful for tightly managed jobs; otherwise the
+    size scales with available memory, has a conservative safety cap, and is
+    capped by the filesystem that will hold the object store.
+    """
+    configured = _configured_object_store_memory()
+    if configured is not None:
+        return configured
+
+    available_mem = int(
+        psutil.virtual_memory().available * _DEFAULT_OBJECT_STORE_FRACTION
+    )
+    target = max(
+        _MIN_RAY_OBJECT_STORE_MEMORY,
+        min(available_mem, _DEFAULT_OBJECT_STORE_CAP),
+    )
 
     try:
-        shm_total = shutil.disk_usage("/dev/shm").total
+        shm_free = shutil.disk_usage("/dev/shm").free
     except OSError:
-        shm_total = 0
+        shm_free = 0
 
-    if shm_total >= 1 * 1024**3:
-        return min(target, int(shm_total * 0.8))
+    shm_target = int(shm_free * 0.8)
+    if shm_target >= _MIN_RAY_OBJECT_STORE_MEMORY:
+        return min(target, shm_target)
+
+    # Ray falls back to its temp directory when shared memory is too small.
+    # Bound the mmap size by that filesystem too, so a small job-local volume
+    # fails early with a useful error instead of crashing Ray later.
+    fallback_dir = ray_temp_dir or tempfile.gettempdir()
+    try:
+        fallback_free = shutil.disk_usage(fallback_dir).free
+    except OSError:
+        fallback_free = 0
+    target = min(target, int(fallback_free * 0.8))
+    if target < _MIN_RAY_OBJECT_STORE_MEMORY:
+        raise RuntimeError(
+            "Not enough free space for Ray's object store: need at least "
+            f"{_MIN_RAY_OBJECT_STORE_MEMORY} bytes in {fallback_dir}"
+        )
 
     os.environ.setdefault("RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE", "1")
-    return min(target, 2 * 1024**3)
+    return target
 
 
 # Ray's AMD accelerator manager rejects ROCR_VISIBLE_DEVICES during import.

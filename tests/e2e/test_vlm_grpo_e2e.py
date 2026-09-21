@@ -7,8 +7,11 @@ Verifies the VLM GRPO training loop works end-to-end including:
 - GRPO rollout + reward computation
 - Multiple optimizer steps with nonzero gradients
 
-Run on a GPU node with:
-    uv run pytest --vlm tests/e2e/test_vlm_grpo_e2e.py -v
+Run an individual case on a local GPU with:
+    uv run pytest tests/e2e/test_vlm_grpo_e2e.py::TestVLMGRPO::test_vlm_grpo_multi_image_optimizes -v
+
+Submit the complete E2E matrix with:
+    tests/e2e/slurm/submit_e2e_tests.sh
 """
 
 import json
@@ -32,9 +35,9 @@ FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
 
 def _write_multi_image_grpo_config(tmp_path):
-    fixture_dir = tmp_path.parent / "grpo_multi_image_fixture"
+    fixture_dir = tmp_path / "grpo_multi_image_fixture"
     image_dir = fixture_dir / "images"
-    image_dir.mkdir(parents=True)
+    image_dir.mkdir(parents=True, exist_ok=True)
     image_paths = []
     for name, color in (("red", "red"), ("blue", "blue")):
         path = image_dir / f"{name}.png"

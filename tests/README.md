@@ -22,20 +22,36 @@ uv run python -m pytest tests/config tests/numerics
 
 ## GPU Smoke Tests
 
+The complete E2E suite is SLURM-only. The launcher submits two jobs: a four-GPU
+Ray job for the normal distributed cases and a one-GPU job for explicit native
+local cases. Each job uses one self-contained, job-scoped temporary
+root, requests an early TERM signal for cleanup, and removes its own temporary
+root on normal termination. On AMD/ROCm, select the project before submission:
+
 ```bash
-uv run pytest tests/e2e --dense --moe --vlm --retrieval
+export UV_PROJECT=envs/rocm
+tests/e2e/slurm/submit_e2e_tests.sh
 ```
 
-For ROCm:
+Inspect both generated batch scripts without submitting them:
 
 ```bash
-UV_PROJECT=envs/rocm uv run python -m pytest tests/e2e --dense --moe --vlm --retrieval
+tests/e2e/slurm/submit_e2e_tests.sh --dry-run
 ```
 
-To run only the native local-path cases on one GPU:
+Individual tests may be run directly for debugging. A direct multi-test E2E
+invocation is rejected; a multi-GPU test with only one visible GPU fails with a
+message directing you to SLURM.
 
 ```bash
-GPUS_PER_TASK=1 PYTEST_ARGS="tests/e2e -m single_gpu" tests/e2e/slurm/submit_e2e_tests.sh
+uv run pytest tests/e2e/test_grpo_e2e.py::TestDenseGRPO::test_text_grpo_optimizes -v
+```
+
+To submit only one side of the matrix:
+
+```bash
+tests/e2e/slurm/submit_e2e_tests.sh --mode=ray
+tests/e2e/slurm/submit_e2e_tests.sh --mode=local
 ```
 
 ## FA2 Validation

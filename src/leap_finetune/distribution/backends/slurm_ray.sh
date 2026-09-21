@@ -100,7 +100,8 @@ ray_slurm_start_cluster_bg() {
   srun --nodes=1 --ntasks=1 -w "${RAY_HEAD_NODE}" mkdir -p "${head_temp_dir}"
   srun --nodes=1 --ntasks=1 -w "${RAY_HEAD_NODE}" \
     ray start --head --node-ip-address="${RAY_HEAD_IP}" --port="${RAY_PORT}" \
-    --temp-dir="${head_temp_dir}" --disable-usage-stats --block &
+    --temp-dir="${head_temp_dir}" --object-spilling-directory="${head_temp_dir}/spill" \
+    --disable-usage-stats --block &
   RAY_SLURM_PIDS+=("$!")
 
   sleep 5
@@ -110,7 +111,9 @@ ray_slurm_start_cluster_bg() {
     local worker_temp_dir="${RAY_TEMP_ROOT}/${node}"
     srun --nodes=1 --ntasks=1 -w "${node}" mkdir -p "${worker_temp_dir}"
     srun --nodes=1 --ntasks=1 -w "${node}" \
-      ray start --address="${RAY_ADDRESS}" --temp-dir="${worker_temp_dir}" --disable-usage-stats --block &
+      ray start --address="${RAY_ADDRESS}" --temp-dir="${worker_temp_dir}" \
+      --object-spilling-directory="${worker_temp_dir}/spill" \
+      --disable-usage-stats --block &
     RAY_SLURM_PIDS+=("$!")
   done
 }
@@ -152,6 +155,23 @@ PY
   return 1
 }
 
+ray_slurm_cleanup_temp() {
+  local temp_root="${RAY_TEMP_ROOT:-}"
+  local job_id="${SLURM_JOB_ID:-}"
+  if [[ -z "${temp_root}" || -z "${job_id}" ]]; then
+    return 0
+  fi
+  if [[ "${temp_root##*/}" != "r${job_id}" || "${temp_root}" == "/" ]]; then
+    echo "Skipping Ray temp cleanup for non-job-scoped path: ${temp_root}" >&2
+    return 0
+  fi
+
+  local node
+  for node in "${RAY_SLURM_NODES[@]:-}"; do
+    srun --nodes=1 --ntasks=1 -w "${node}" rm -rf -- "${temp_root}" || true
+  done
+}
+
 ray_slurm_stop_cluster() {
   # === Ray teardown ===
   # The Ray daemons are owned by background `srun ... ray start --block`
@@ -176,4 +196,7 @@ ray_slurm_stop_cluster() {
     fi
     wait "${pid}" 2>/dev/null || true
   done
+
+  # Remove only the job-scoped Ray root after all daemons have stopped.
+  ray_slurm_cleanup_temp
 }
