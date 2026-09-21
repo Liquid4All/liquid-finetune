@@ -20,6 +20,11 @@ from leap_finetune.evaluation import (
     create_vlm_benchmarks_from_config,
     make_eval_callback,
 )
+from leap_finetune.quantization.qat import (
+    finalize_qat_after_peft,
+    prepare_model_for_qat,
+)
+from leap_finetune.quantization.qat.grpo import QATGRPOReferenceMixin
 from leap_finetune.rl.rewards import resolve_reward_specs
 from leap_finetune.training.default_configs.grpo_configs import VLM_GRPO_EXCLUDED_KEYS
 from leap_finetune.training.default_configs.vlm_sft_configs import (
@@ -51,7 +56,7 @@ logger = logging.getLogger(__name__)
 # === VLM GRPO loop ===
 
 
-class LFMVLMGRPOTrainer(GRPOTrainer):
+class LFMVLMGRPOTrainer(QATGRPOReferenceMixin, GRPOTrainer):
     """Leap integration around TRL native LFM2-VL GRPO support.
 
     TRL 1.7+ owns multimodal image discovery, tile-aware buffering,
@@ -139,6 +144,12 @@ def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -
     job_name = training_config.get("job_name", "leap-ft-run")
 
     train_config = training_config.get("train_config", {})
+    qat_config = train_config.get("qat")
+    if qat_config and train_config.get("use_vllm", False):
+        raise ValueError(
+            "QAT GRPO requires use_vllm: false so rollout and training "
+            "use the same fake-quantized model."
+        )
     max_image_tokens = train_config.get("max_image_tokens")
     do_image_splitting = train_config.get("do_image_splitting", True)
     run_name_template = train_config.get("leap_run_name_template")
@@ -182,6 +193,13 @@ def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -
         max_image_tokens=max_image_tokens,
         do_image_splitting=do_image_splitting,
     )
+    prepare_model_for_qat(
+        model,
+        train_config,
+        is_vlm=True,
+        uses_peft=bool(peft_config),
+        resume_from_checkpoint=resume_from,
+    )
     # GRPO appends completions to prompts, so left padding keeps positions sane.
     if hasattr(processor, "tokenizer") and processor.tokenizer is not None:
         processor.tokenizer.padding_side = "left"
@@ -190,6 +208,7 @@ def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -
 
     if peft_config:
         model = apply_peft_to_model(model, peft_config)
+    finalize_qat_after_peft(model)
 
     reward_funcs, reward_weights = resolve_reward_specs(
         training_config.get("rewards"),
@@ -234,6 +253,7 @@ def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -
         training_args.reward_weights = reward_weights
 
     trainer = LFMVLMGRPOTrainer(
+        qat_config=qat_config,
         lr_multipliers=lr_multipliers,
         model=model,
         reward_funcs=reward_funcs,

@@ -1,0 +1,22 @@
+# Standalone GGUF evaluation. llama-server is launched and stopped by the
+# evaluator. Use a generation metric; llama.cpp continuation logprob scoring is
+# not yet wired into leap-finetune.
+project_name: "qat_gguf_eval"
+checkpoint: "/shared/path/model-Q4_0.gguf"
+modality: "text"
+
+evals:
+  max_new_tokens: 64
+  benchmarks:
+    - name: "tiny_qa"
+      path: "../tests/e2e/fixtures/tiny_qa_bench.jsonl"
+      metric: "short_answer"
+      limit: 10
+
+backend:
+  type: "llama_cpp"
+  server_binary: "/shared/path/llama.cpp/build/bin/llama-server"
+  n_gpu_layers: 999
+  port: 8080
+  log_path: "/shared/path/qat-artifacts/logs/llama-server.log"
+  server_args: ["--ctx-size", "4096"]

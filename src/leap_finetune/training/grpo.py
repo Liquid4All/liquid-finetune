@@ -21,6 +21,11 @@ from leap_finetune.evaluation import (
     create_llm_benchmarks_from_config,
     make_eval_callback,
 )
+from leap_finetune.quantization.qat import (
+    finalize_qat_after_peft,
+    prepare_model_for_qat,
+)
+from leap_finetune.quantization.qat.grpo import QATGRPOReferenceMixin
 from leap_finetune.rl.rewards import resolve_reward_specs
 from leap_finetune.training.default_configs.grpo_configs import GRPO_EXCLUDED_KEYS
 from leap_finetune.training.peft.peft import (
@@ -41,6 +46,10 @@ from leap_finetune.training.utils.worker_setup import (
 from leap_finetune.training.utils.config_filter import filter_runtime_config_kwargs
 
 logger = logging.getLogger(__name__)
+
+
+class LFMGRPOTrainer(QATGRPOReferenceMixin, GRPOTrainer):
+    """Text GRPO trainer with QAT-aware reference preparation."""
 
 
 def _apply_grpo_peft(
@@ -78,6 +87,12 @@ def grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> No
         raise ValueError("GRPO for MoE models is not supported in this EP branch")
 
     train_config = training_config.get("train_config", {})
+    qat_config = train_config.get("qat")
+    if qat_config and train_config.get("use_vllm", False):
+        raise ValueError(
+            "QAT GRPO requires use_vllm: false so rollout and training "
+            "use the same fake-quantized model."
+        )
     run_name_template = train_config.get("leap_run_name_template")
     resume_from = train_config.get("resume_from_checkpoint")
     adapter_path = train_config.get("adapter_path")
@@ -107,6 +122,12 @@ def grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> No
     training_args = GRPOConfig(**config_kwargs)
 
     model, tokenizer = load_model(model_name)
+    prepare_model_for_qat(
+        model,
+        train_config,
+        uses_peft=bool(peft_config or adapter_path),
+        resume_from_checkpoint=resume_from,
+    )
     # GRPO requires left-padded prompts so generated completions append cleanly.
     tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:
@@ -117,6 +138,7 @@ def grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> No
         peft_config=peft_config,
         adapter_path=adapter_path,
     )
+    finalize_qat_after_peft(model)
 
     # Resolve reward functions from the driver-side config_dir. Loaders are
     # deterministic, so each worker re-runs the resolution independently
@@ -163,7 +185,8 @@ def grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> No
     if reward_weights is not None:
         training_args.reward_weights = reward_weights
 
-    trainer = GRPOTrainer(
+    trainer = LFMGRPOTrainer(
+        qat_config=qat_config,
         model=model,
         reward_funcs=reward_funcs,
         args=training_args,

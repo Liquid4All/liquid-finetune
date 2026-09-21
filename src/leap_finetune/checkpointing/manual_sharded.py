@@ -19,6 +19,7 @@ from transformers.trainer import SCALER_NAME, SCHEDULER_NAME
 from transformers.trainer import TRAINER_STATE_NAME
 
 from leap_finetune.checkpointing.hf_export import save_manual_sharded_model_export
+from leap_finetune.quantization.qat.metadata import write_qat_metadata
 from leap_finetune.checkpointing.paths import (
     current_checkpoint_output_dir,
     resolve_checkpoint_output_dir,
@@ -165,6 +166,10 @@ def _save_root_metadata(
         metadata.update(_json_safe(export_metadata))
     with open(_manual_sharded_metadata_path(checkpoint_dir), "w") as handle:
         json.dump(metadata, handle, indent=2)
+    training_metadata = (export_metadata or {}).get("training_config", {})
+    qat_config = (training_metadata.get("train_config", {}) or {}).get("qat")
+    if qat_config:
+        write_qat_metadata(checkpoint_dir, qat_config)
 
 
 def _load_root_metadata(checkpoint_dir: str) -> dict[str, Any]:

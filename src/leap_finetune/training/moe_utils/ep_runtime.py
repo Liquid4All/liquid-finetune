@@ -23,6 +23,9 @@ from torch.distributed._functional_collectives import (
     all_to_all_single_autograd,
 )
 
+from leap_finetune.quantization.qat.experts import (
+    prepare_qat_experts,
+)
 from leap_finetune.training.moe_utils.memory_trace import write_memory_trace_event
 from leap_finetune.training.moe_utils.losses import (
     InjectAuxLoss,
@@ -345,12 +348,14 @@ def compute_local_experts(
     # expert boundaries expected by grouped_mm: gate/up projection, activation,
     # routing weight, then down projection.
     offsets = torch.cumsum(tokens_per_expert, dim=0, dtype=torch.int32)
-    gate_up_out = grouped_mm(tokens, experts.gate_up_proj.transpose(-2, -1), offsets)
+    qat = prepare_qat_experts(experts, tokens)
+    gate_up_out = grouped_mm(qat.tokens, qat.gate_up_weight.transpose(-2, -1), offsets)
     gate, up = gate_up_out.chunk(2, dim=-1)
     activated = experts.act_fn(gate) * up
     if routing_weights is not None:
         activated = activated * routing_weights.to(activated.dtype)
-    return grouped_mm(activated, experts.down_proj.transpose(-2, -1), offsets)
+    activated = qat.prepare_down_input(activated)
+    return grouped_mm(activated, qat.down_weight.transpose(-2, -1), offsets)
 
 
 def _inject_ep_aux_losses(

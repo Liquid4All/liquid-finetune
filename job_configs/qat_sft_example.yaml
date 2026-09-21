@@ -1,0 +1,20 @@
+project_name: qat_sft_example
+model_name: LFM2-1.2B
+training_type: sft
+
+dataset:
+  path: HuggingFaceTB/smoltalk
+  type: sft
+  subset: all
+  limit: 1000
+  test_size: 0.1
+
+training_config:
+  extends: DEFAULT_SFT
+  num_train_epochs: 1
+  qat:
+    type: gguf_q4_0
+
+peft_config:
+  extends: DEFAULT_LORA
+  use_peft: true

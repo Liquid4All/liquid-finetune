@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import pathlib
+import shutil
+import subprocess
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -408,3 +412,157 @@ class VLLMServerBackend:
             self.session.close()
         except Exception:
             pass
+
+
+def build_llama_server_command(
+    *,
+    server_binary: str,
+    model_path: str,
+    host: str,
+    port: int,
+    n_gpu_layers: int,
+    model_id: str,
+    mmproj: str | None = None,
+    server_args: list[str] | None = None,
+) -> list[str]:
+    """Build a llama-server command without invoking a shell."""
+    command = [
+        server_binary,
+        "--model",
+        model_path,
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--n-gpu-layers",
+        str(n_gpu_layers),
+        "--alias",
+        model_id,
+    ]
+    if mmproj:
+        command.extend(["--mmproj", mmproj])
+    command.extend(server_args or [])
+    return command
+
+
+class LlamaCppServerBackend(VLLMServerBackend):
+    """OpenAI-compatible llama.cpp client with optional server ownership.
+
+    When ``base_url`` is omitted the backend launches ``llama-server`` and
+    terminates it on close. Supplying ``base_url`` connects to a server managed
+    by Slurm, a container, or the caller.
+    """
+
+    name = "llama-cpp-server"
+
+    def __init__(
+        self,
+        model_path: str,
+        *,
+        base_url: str | None = None,
+        model_id: str | None = None,
+        server_binary: str = "llama-server",
+        host: str = "127.0.0.1",
+        port: int = 8080,
+        n_gpu_layers: int = 999,
+        mmproj: str | None = None,
+        server_args: list[str] | None = None,
+        startup_timeout: float = 300.0,
+        request_timeout: float = 600.0,
+        log_path: str | None = None,
+    ):
+        self.process: subprocess.Popen | None = None
+        self._log_handle = None
+        resolved_model_id = model_id or pathlib.Path(model_path).stem
+        resolved_base_url = base_url or f"http://{host}:{port}"
+
+        super().__init__(
+            base_url=resolved_base_url,
+            model_id=resolved_model_id,
+            timeout=request_timeout,
+        )
+        if base_url:
+            return
+
+        model = pathlib.Path(model_path).expanduser()
+        if not model.is_file():
+            self.session.close()
+            raise FileNotFoundError(f"GGUF model not found: {model}")
+        if mmproj and not pathlib.Path(mmproj).expanduser().is_file():
+            self.session.close()
+            raise FileNotFoundError(f"GGUF multimodal projector not found: {mmproj}")
+
+        binary = shutil.which(server_binary)
+        if binary is None:
+            candidate = pathlib.Path(server_binary).expanduser()
+            if not candidate.is_file():
+                self.session.close()
+                raise FileNotFoundError(
+                    f"llama-server not found: {server_binary}. Build llama.cpp "
+                    "with -DGGML_HIP=ON or set backend.server_binary."
+                )
+            binary = str(candidate)
+
+        if log_path:
+            path = pathlib.Path(log_path).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._log_handle = path.open("a", encoding="utf-8")
+            output = self._log_handle
+        else:
+            output = subprocess.DEVNULL
+
+        command = build_llama_server_command(
+            server_binary=binary,
+            model_path=str(model),
+            host=host,
+            port=port,
+            n_gpu_layers=n_gpu_layers,
+            model_id=resolved_model_id,
+            mmproj=mmproj,
+            server_args=server_args,
+        )
+        self.process = subprocess.Popen(
+            command,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        try:
+            self._wait_until_ready(startup_timeout)
+        except Exception:
+            self.close()
+            raise
+
+    def _wait_until_ready(self, timeout: float) -> None:
+        deadline = time.monotonic() + timeout
+        last_error: Exception | None = None
+        while time.monotonic() < deadline:
+            if self.process is not None and self.process.poll() is not None:
+                raise RuntimeError(
+                    f"llama-server exited during startup with code "
+                    f"{self.process.returncode}"
+                )
+            try:
+                response = self.session.get(
+                    f"{self.base_url}/health",
+                    timeout=min(5.0, timeout),
+                )
+                if response.ok:
+                    return
+            except Exception as exc:
+                last_error = exc
+            time.sleep(0.25)
+        detail = f": {last_error}" if last_error else ""
+        raise TimeoutError(f"llama-server did not become healthy in {timeout}s{detail}")
+
+    def close(self) -> None:
+        super().close()
+        if self.process is not None and self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=5)
+        if self._log_handle is not None:
+            self._log_handle.close()

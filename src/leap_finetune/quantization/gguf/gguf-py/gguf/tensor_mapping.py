@@ -97,6 +97,7 @@ class TensorNameMap:
         MODEL_TENSOR.FFN_NORM: (
             "gpt_neox.layers.{bid}.post_attention_layernorm",  # gptneox
             "model.layers.{bid}.post_attention_layernorm",  # llama-hf nemotron olmoe phimoe
+            "model.layers.{bid}.ffn_norm",  # internlm2 lfm2
         ),
         MODEL_TENSOR.FFN_GATE_INP: (
             "layers.{bid}.feed_forward.gate",  # mixtral
@@ -111,6 +112,7 @@ class TensorNameMap:
         MODEL_TENSOR.FFN_UP: (
             "gpt_neox.layers.{bid}.mlp.dense_h_to_4h",  # gptneox
             "model.layers.{bid}.mlp.up_proj",  # llama-hf refact nemotron olmo2
+            "model.layers.{bid}.feed_forward.w3",  # internlm2 lfm2
         ),
         MODEL_TENSOR.FFN_UP_EXP: (
             "layers.{bid}.feed_forward.experts.w3",  # mixtral (merged)
@@ -120,6 +122,7 @@ class TensorNameMap:
         MODEL_TENSOR.FFN_GATE: (
             "model.layers.{bid}.mlp.gate_proj",  # llama-hf refact olmo2
             "model.layers.{bid}.feed_forward.gate_proj",  # llama4 jamba granite-hybrid
+            "model.layers.{bid}.feed_forward.w1",  # internlm2 lfm2
         ),
         MODEL_TENSOR.FFN_GATE_EXP: (
             "layers.{bid}.feed_forward.experts.w1",  # mixtral (merged)
@@ -129,6 +132,7 @@ class TensorNameMap:
         MODEL_TENSOR.FFN_DOWN: (
             "gpt_neox.layers.{bid}.mlp.dense_4h_to_h",  # gptneox
             "model.layers.{bid}.mlp.down_proj",  # llama-hf nemotron olmo2
+            "model.layers.{bid}.feed_forward.w2",  # internlm2 lfm2
         ),
         MODEL_TENSOR.FFN_DOWN_EXP: (
             "layers.{bid}.feed_forward.experts.w2",  # mixtral (merged)
@@ -136,10 +140,12 @@ class TensorNameMap:
         ),
         MODEL_TENSOR.ATTN_Q_NORM: (
             "language_model.encoder.layers.{bid}.self_attention.q_layernorm",
+            "model.layers.{bid}.self_attn.q_layernorm",  # persimmon lfm2
             "model.layers.{bid}.self_attn.q_norm",  # cohere olmoe chameleon olmo2
         ),
         MODEL_TENSOR.ATTN_K_NORM: (
             "language_model.encoder.layers.{bid}.self_attention.k_layernorm",
+            "model.layers.{bid}.self_attn.k_layernorm",  # persimmon lfm2
             "model.layers.{bid}.self_attn.k_norm",  # cohere olmoe chameleon olmo2
         ),
         MODEL_TENSOR.ROPE_FREQS: (
