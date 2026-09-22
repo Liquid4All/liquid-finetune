@@ -33,11 +33,13 @@ MANUAL_SHARDED_RUNTIME_EXCLUDED_KEYS = {
 }
 
 VLM_RUNTIME_EXCLUDED_KEYS = {
+    "min_image_tokens",
     "max_image_tokens",
     "do_image_splitting",
     "group_by_image_tiles",
     "lr_multipliers",
     "vision_encoder_lr_multiplier",
+    "freeze_vision_encoder",
 }
 
 
