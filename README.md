@@ -561,7 +561,8 @@ dataset shape:
 
 `negative` is optional for training and required for triplet-accuracy metrics.
 Dense training automatically applies `query: ` and `document: ` prompts.
-ColBERT uses PyLate's query/document tokenization and MaxSim loss. On multiple
+ColBERT uses Sentence Transformers' multi-vector query/document tokenization
+and MaxSim loss. On multiple
 GPUs, both losses gather in-batch negatives across workers; each retrieval
 worker aligns its shard to complete batches so collective tensor shapes stay
 equal.
