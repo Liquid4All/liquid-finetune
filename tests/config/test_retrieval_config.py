@@ -2,6 +2,12 @@ import pytest
 import yaml
 
 from leap_finetune.config.parser import materialize_job_config, parse_job_config
+from sentence_transformers import (
+    MultiVectorEncoderTrainingArguments,
+    SentenceTransformerTrainingArguments,
+)
+
+from leap_finetune.training.retrieval_utils import build_retrieval_training_args
 
 pytestmark = pytest.mark.configs
 
@@ -34,6 +40,23 @@ peft_config:
     assert job.dataset.dataset_type == dataset_type
     assert job.training_config.value["gather_across_devices"] is True
     assert job.training_config.value["gradient_accumulation_steps"] == 1
+
+
+def test_retrieval_training_args_select_model_type(tmp_path):
+    config = {
+        "output_dir": str(tmp_path),
+        "per_device_train_batch_size": 1,
+        "per_device_eval_batch_size": 1,
+        "bf16": False,
+    }
+    dense_args = build_retrieval_training_args(
+        config, tracker="none", job_name="dense"
+    )
+    multi_vector_args = build_retrieval_training_args(
+        config, tracker="none", job_name="colbert", multi_vector=True
+    )
+    assert isinstance(dense_args, SentenceTransformerTrainingArguments)
+    assert isinstance(multi_vector_args, MultiVectorEncoderTrainingArguments)
 
 
 def test_retrieval_config_rejects_type_mismatch(tmp_path):

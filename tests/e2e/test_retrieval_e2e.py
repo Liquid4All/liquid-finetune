@@ -2,9 +2,8 @@ import math
 import pathlib
 
 import pytest
-from pylate import models
 import yaml
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import MultiVectorEncoder, SentenceTransformer
 
 from conftest import requires_gpu, requires_multi_gpu, run_e2e_training
 
@@ -45,14 +44,14 @@ def _assert_checkpoint_reloads(kind, output_dir):
     checkpoint = max(checkpoints, key=lambda path: path.stat().st_mtime)
     assert (checkpoint / "modeling_lfm2_bidirectional.py").is_file()
 
-    model_cls = SentenceTransformer if kind == "embedding" else models.ColBERT
+    model_cls = SentenceTransformer if kind == "embedding" else MultiVectorEncoder
     model = model_cls(
         str(checkpoint),
         device="cpu",
         trust_remote_code=True,
         local_files_only=True,
     )
-    assert len(model) == 2
+    assert len(model) == (2 if kind == "embedding" else 4)
 
 
 @pytest.mark.parametrize("kind", ["embedding", "colbert"])
