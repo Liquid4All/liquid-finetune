@@ -49,9 +49,7 @@ def test_retrieval_training_args_select_model_type(tmp_path):
         "per_device_eval_batch_size": 1,
         "bf16": False,
     }
-    dense_args = build_retrieval_training_args(
-        config, tracker="none", job_name="dense"
-    )
+    dense_args = build_retrieval_training_args(config, tracker="none", job_name="dense")
     multi_vector_args = build_retrieval_training_args(
         config, tracker="none", job_name="colbert", multi_vector=True
     )
