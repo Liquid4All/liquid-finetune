@@ -982,11 +982,21 @@ with LFM2 model support, so SSH access to those repos is required.
 ## Quantization / GGUF Export
 
 Export a HuggingFace checkpoint or PEFT adapter to GGUF with
-`leap-export-gguf`:
+`leap-export-gguf`. All exports use the conversion scripts from a llama.cpp
+checkout and its isolated Python environment:
 
 ```bash
+git clone https://github.com/ggml-org/llama.cpp
+cd llama.cpp
+uv venv --seed .venv
+.venv/bin/python -m pip install -r requirements.txt
+
+export LLAMA_CPP_DIR=/path/to/llama.cpp
 uv run leap-export-gguf /path/to/checkpoint --quant F16 --output-dir ./outputs/gguf
 ```
+
+By default, conversion uses `$LLAMA_CPP_DIR/.venv/bin/python`. Override it
+with `LLAMA_CPP_PYTHON` or `--llama-cpp-python`.
 
 Repeat `--quant` to produce multiple outputs:
 
@@ -998,10 +1008,13 @@ uv run leap-export-gguf /path/to/checkpoint \
   --llama-cpp-dir /path/to/llama.cpp
 ```
 
-`F16`, `BF16`, `F32`, and `Q8_0` are exported directly with the bundled
-llama.cpp conversion scripts. K-quants such as `Q4_K_M`, `Q5_K_M`, and `Q6_K`
-require a built llama.cpp checkout containing `build/bin/llama-quantize`; pass
-`--llama-cpp-dir` or set `LLAMA_CPP_DIR`.
+`F16`, `BF16`, `F32`, and `Q8_0` are produced directly by
+`convert_hf_to_gguf.py`. K-quants such as `Q4_K_M`, `Q5_K_M`, and `Q6_K`
+additionally require the checkout to be built (`build/bin/llama-quantize`).
+
+Multimodal checkpoints (e.g. LFM2-VL) also emit a companion vision projector
+file, `mmproj-<name>-F16.gguf`, alongside the text GGUF(s); load both in
+llama.cpp to run the model.
 
 PEFT adapter directories can be exported with `F16`, `BF16`, `F32`, or `Q8_0`:
 

@@ -52,7 +52,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--llama-cpp-dir",
         default=None,
-        help="llama.cpp checkout containing build/bin/llama-quantize for K-quants.",
+        help=(
+            "llama.cpp checkout providing the conversion scripts (and "
+            "build/bin/llama-quantize for K-quants). Defaults to $LLAMA_CPP_DIR."
+        ),
+    )
+    parser.add_argument(
+        "--llama-cpp-python",
+        default=None,
+        help=(
+            "Python interpreter with llama.cpp's converter dependencies. "
+            "Defaults to $LLAMA_CPP_PYTHON, then <llama.cpp>/.venv/bin/python."
+        ),
     )
     return parser
 
@@ -85,6 +96,7 @@ def main() -> None:
         output_dir=output_dir,
         base_model_path=args.base_model_path,
         llama_cpp_dir=args.llama_cpp_dir,
+        llama_cpp_python=args.llama_cpp_python,
     )
 
     print("GGUF export complete:")

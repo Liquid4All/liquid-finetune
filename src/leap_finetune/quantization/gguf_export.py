@@ -1,15 +1,10 @@
+import json
 import logging
 import os
 import pathlib
 import subprocess
-import sys
 
 logger = logging.getLogger(__name__)
-
-# Bundled llama.cpp conversion scripts
-GGUF_DIR = pathlib.Path(__file__).resolve().parent / "gguf"
-BUNDLED_CONVERT_HF = GGUF_DIR / "convert_hf_to_gguf.py"
-BUNDLED_CONVERT_LORA = GGUF_DIR / "convert_lora_to_gguf.py"
 
 # === Quantization type sets ===
 
@@ -42,21 +37,59 @@ ADAPTER_QUANTS = {"F16", "BF16", "F32", "Q8_0"}
 OUTTYPE_MAP = {"F16": "f16", "BF16": "bf16", "F32": "f32", "Q8_0": "q8_0"}
 
 
-def resolve_quantize_binary(cli_arg: str | None) -> pathlib.Path:
+def resolve_llama_cpp_dir(cli_arg: str | None) -> pathlib.Path:
     raw = cli_arg or os.environ.get("LLAMA_CPP_DIR")
     if not raw:
         raise FileNotFoundError(
-            "llama-quantize binary is required for K-quant types.\n\n"
+            "A llama.cpp checkout is required for GGUF export.\n\n"
             "Set LLAMA_CPP_DIR or use --llama-cpp-dir:\n\n"
             "  git clone https://github.com/ggml-org/llama.cpp\n"
-            "  cd llama.cpp && cmake -B build && cmake --build build --config Release\n"
             "  export LLAMA_CPP_DIR=/path/to/llama.cpp\n"
         )
 
-    llama_dir = pathlib.Path(raw).resolve()
+    llama_dir = pathlib.Path(raw).expanduser().resolve()
     if not llama_dir.is_dir():
         raise FileNotFoundError(f"llama.cpp directory does not exist: {llama_dir}")
+    return llama_dir
 
+
+def resolve_converter_python(
+    llama_dir: pathlib.Path, cli_arg: str | None
+) -> pathlib.Path:
+    raw = cli_arg or os.environ.get("LLAMA_CPP_PYTHON")
+    candidates = (
+        [pathlib.Path(raw).expanduser()]
+        if raw
+        else [
+            llama_dir / ".venv" / "bin" / "python",
+            llama_dir / ".venv" / "Scripts" / "python.exe",
+        ]
+    )
+    for path in candidates:
+        if path.is_file() and os.access(path, os.X_OK):
+            return path.absolute()
+
+    requested = pathlib.Path(raw).expanduser() if raw else candidates[0]
+    raise FileNotFoundError(
+        f"llama.cpp converter Python not found or not executable: {requested}\n\n"
+        "Create an isolated environment with llama.cpp's dependencies:\n"
+        f"  cd {llama_dir}\n"
+        "  uv venv --seed .venv\n"
+        "  .venv/bin/python -m pip install -r requirements.txt\n\n"
+        "Or set LLAMA_CPP_PYTHON / use --llama-cpp-python."
+    )
+
+
+def resolve_convert_script(llama_dir: pathlib.Path, name: str) -> pathlib.Path:
+    script = llama_dir / name
+    if not script.exists():
+        raise FileNotFoundError(
+            f"{name} not found in {llama_dir}. Update your llama.cpp checkout."
+        )
+    return script
+
+
+def resolve_quantize_binary(llama_dir: pathlib.Path) -> pathlib.Path:
     candidates = [
         llama_dir / "build" / "bin" / "llama-quantize",
         llama_dir / "llama-quantize",
@@ -93,26 +126,42 @@ def validate_model_path(model_path: pathlib.Path) -> None:
 
 def _run_subprocess(cmd: list[str], description: str) -> None:
     logger.info("%s: %s", description, " ".join(cmd))
-    result = subprocess.run(cmd)
+    result = subprocess.run(cmd, check=False)
     if result.returncode != 0:
         raise RuntimeError(f"{description} failed (exit code {result.returncode})")
+
+
+def has_mmproj_encoder(model_path: pathlib.Path) -> bool:
+    """True for multimodal checkpoints that carry a vision/audio encoder to
+    export as a separate mmproj GGUF."""
+    config_file = model_path / "config.json"
+    if not config_file.exists():
+        return False
+    config = json.loads(config_file.read_text())
+    return "vision_config" in config or "audio_config" in config
 
 
 def convert_hf_to_gguf(
     model_path: pathlib.Path,
     output_path: pathlib.Path,
+    convert_script: pathlib.Path,
+    converter_python: pathlib.Path,
     outtype: str = "f16",
+    mmproj: bool = False,
 ) -> pathlib.Path:
     cmd = [
-        sys.executable,
-        str(BUNDLED_CONVERT_HF),
+        str(converter_python),
+        str(convert_script),
         str(model_path),
         "--outfile",
         str(output_path),
         "--outtype",
         outtype,
     ]
-    _run_subprocess(cmd, f"Converting to GGUF ({outtype})")
+    if mmproj:
+        cmd.append("--mmproj")
+    what = "vision/audio projector" if mmproj else "GGUF"
+    _run_subprocess(cmd, f"Converting {what} ({outtype})")
     logger.info("Created %s (%.2f GB)", output_path, output_path.stat().st_size / 1e9)
     return output_path
 
@@ -120,12 +169,14 @@ def convert_hf_to_gguf(
 def convert_lora_to_gguf(
     adapter_path: pathlib.Path,
     output_path: pathlib.Path,
+    convert_script: pathlib.Path,
+    converter_python: pathlib.Path,
     outtype: str = "f16",
     base_model_path: str | None = None,
 ) -> pathlib.Path:
     cmd = [
-        sys.executable,
-        str(BUNDLED_CONVERT_LORA),
+        str(converter_python),
+        str(convert_script),
         str(adapter_path),
         "--outfile",
         str(output_path),
@@ -158,11 +209,15 @@ def export_gguf(
     output_dir: pathlib.Path,
     base_model_path: str | None = None,
     llama_cpp_dir: str | None = None,
+    llama_cpp_python: str | None = None,
 ) -> list[pathlib.Path]:
     model_name = model_path.name
     output_dir.mkdir(parents=True, exist_ok=True)
     adapter = is_adapter_path(model_path)
     results = []
+
+    llama_dir = resolve_llama_cpp_dir(llama_cpp_dir)
+    converter_python = resolve_converter_python(llama_dir, llama_cpp_python)
 
     if adapter:
         unsupported = set(quant_types) - ADAPTER_QUANTS
@@ -174,34 +229,46 @@ def export_gguf(
                 "then export the merged model."
             )
 
+        convert_lora = resolve_convert_script(llama_dir, "convert_lora_to_gguf.py")
         for quant in quant_types:
             outtype = OUTTYPE_MAP[quant]
             out_path = output_dir / f"{model_name}-lora-{quant}.gguf"
-            convert_lora_to_gguf(model_path, out_path, outtype, base_model_path)
+            convert_lora_to_gguf(
+                model_path,
+                out_path,
+                convert_lora,
+                converter_python,
+                outtype,
+                base_model_path,
+            )
             results.append(out_path)
 
         return results
+
+    convert_hf = resolve_convert_script(llama_dir, "convert_hf_to_gguf.py")
 
     # === Full model export ===
     direct = [q for q in quant_types if q in DIRECT_QUANTS]
     needs_quantize = [q for q in quant_types if q in QUANTIZE_QUANTS]
 
-    # Direct quants (F16, BF16, F32, Q8_0) — single step via bundled script
+    # Direct quants (F16, BF16, F32, Q8_0) — single step via the convert script
     for quant in direct:
         outtype = OUTTYPE_MAP[quant]
         out_path = output_dir / f"{model_name}-{quant}.gguf"
-        convert_hf_to_gguf(model_path, out_path, outtype)
+        convert_hf_to_gguf(model_path, out_path, convert_hf, converter_python, outtype)
         results.append(out_path)
 
     # Quantize quants — need F16 intermediate, then llama-quantize binary
     if needs_quantize:
-        quantize_bin = resolve_quantize_binary(llama_cpp_dir)
+        quantize_bin = resolve_quantize_binary(llama_dir)
 
         f16_requested = "F16" in direct
         f16_path = output_dir / f"{model_name}-F16.gguf"
 
         if not f16_path.exists():
-            convert_hf_to_gguf(model_path, f16_path, "f16")
+            convert_hf_to_gguf(
+                model_path, f16_path, convert_hf, converter_python, "f16"
+            )
 
         for quant in needs_quantize:
             out_path = output_dir / f"{model_name}-{quant}.gguf"
@@ -212,5 +279,19 @@ def export_gguf(
         if not f16_requested and f16_path.exists():
             f16_path.unlink()
             logger.info("Cleaned up intermediate F16 file")
+
+    # Multimodal checkpoints need a companion mmproj GGUF (the vision/audio
+    # encoder), produced once at F16 and paired with any text quant.
+    if has_mmproj_encoder(model_path):
+        mmproj_path = output_dir / f"mmproj-{model_name}-F16.gguf"
+        convert_hf_to_gguf(
+            model_path,
+            mmproj_path,
+            convert_hf,
+            converter_python,
+            "f16",
+            mmproj=True,
+        )
+        results.append(mmproj_path)
 
     return results
