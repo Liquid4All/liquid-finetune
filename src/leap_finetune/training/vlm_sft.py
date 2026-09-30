@@ -188,12 +188,12 @@ def vlm_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
     if group_by_image_tiles:
         train_dataset = add_vlm_tile_counts(train_dataset, processor)
 
-    if freeze_vision_encoder:
-        freeze_vlm_modules(model, ["model.vision_tower"])
     if adapter_path:
         model = load_peft_adapter(model, adapter_path)
     elif peft_config:
         model = apply_peft_to_model(model, peft_config)
+    if freeze_vision_encoder:
+        freeze_vlm_modules(model, ["model.vision_tower"])
 
     collate_fn = create_vlm_collate_fn(processor)
 
