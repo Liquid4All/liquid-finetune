@@ -3,7 +3,6 @@ import logging
 import os
 import pathlib
 import subprocess
-import sys
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +53,33 @@ def resolve_llama_cpp_dir(cli_arg: str | None) -> pathlib.Path:
     return llama_dir
 
 
+def resolve_converter_python(
+    llama_dir: pathlib.Path, cli_arg: str | None
+) -> pathlib.Path:
+    raw = cli_arg or os.environ.get("LLAMA_CPP_PYTHON")
+    candidates = (
+        [pathlib.Path(raw).expanduser()]
+        if raw
+        else [
+            llama_dir / ".venv" / "bin" / "python",
+            llama_dir / ".venv" / "Scripts" / "python.exe",
+        ]
+    )
+    for path in candidates:
+        if path.is_file() and os.access(path, os.X_OK):
+            return path.absolute()
+
+    requested = pathlib.Path(raw).expanduser() if raw else candidates[0]
+    raise FileNotFoundError(
+        f"llama.cpp converter Python not found or not executable: {requested}\n\n"
+        "Create an isolated environment with llama.cpp's dependencies:\n"
+        f"  cd {llama_dir}\n"
+        "  uv venv --seed .venv\n"
+        "  .venv/bin/python -m pip install -r requirements.txt\n\n"
+        "Or set LLAMA_CPP_PYTHON / use --llama-cpp-python."
+    )
+
+
 def resolve_convert_script(llama_dir: pathlib.Path, name: str) -> pathlib.Path:
     script = llama_dir / name
     if not script.exists():
@@ -100,7 +126,7 @@ def validate_model_path(model_path: pathlib.Path) -> None:
 
 def _run_subprocess(cmd: list[str], description: str) -> None:
     logger.info("%s: %s", description, " ".join(cmd))
-    result = subprocess.run(cmd)
+    result = subprocess.run(cmd, check=False)
     if result.returncode != 0:
         raise RuntimeError(f"{description} failed (exit code {result.returncode})")
 
@@ -119,11 +145,12 @@ def convert_hf_to_gguf(
     model_path: pathlib.Path,
     output_path: pathlib.Path,
     convert_script: pathlib.Path,
+    converter_python: pathlib.Path,
     outtype: str = "f16",
     mmproj: bool = False,
 ) -> pathlib.Path:
     cmd = [
-        sys.executable,
+        str(converter_python),
         str(convert_script),
         str(model_path),
         "--outfile",
@@ -143,11 +170,12 @@ def convert_lora_to_gguf(
     adapter_path: pathlib.Path,
     output_path: pathlib.Path,
     convert_script: pathlib.Path,
+    converter_python: pathlib.Path,
     outtype: str = "f16",
     base_model_path: str | None = None,
 ) -> pathlib.Path:
     cmd = [
-        sys.executable,
+        str(converter_python),
         str(convert_script),
         str(adapter_path),
         "--outfile",
@@ -181,6 +209,7 @@ def export_gguf(
     output_dir: pathlib.Path,
     base_model_path: str | None = None,
     llama_cpp_dir: str | None = None,
+    llama_cpp_python: str | None = None,
 ) -> list[pathlib.Path]:
     model_name = model_path.name
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -188,6 +217,7 @@ def export_gguf(
     results = []
 
     llama_dir = resolve_llama_cpp_dir(llama_cpp_dir)
+    converter_python = resolve_converter_python(llama_dir, llama_cpp_python)
 
     if adapter:
         unsupported = set(quant_types) - ADAPTER_QUANTS
@@ -204,7 +234,12 @@ def export_gguf(
             outtype = OUTTYPE_MAP[quant]
             out_path = output_dir / f"{model_name}-lora-{quant}.gguf"
             convert_lora_to_gguf(
-                model_path, out_path, convert_lora, outtype, base_model_path
+                model_path,
+                out_path,
+                convert_lora,
+                converter_python,
+                outtype,
+                base_model_path,
             )
             results.append(out_path)
 
@@ -220,7 +255,7 @@ def export_gguf(
     for quant in direct:
         outtype = OUTTYPE_MAP[quant]
         out_path = output_dir / f"{model_name}-{quant}.gguf"
-        convert_hf_to_gguf(model_path, out_path, convert_hf, outtype)
+        convert_hf_to_gguf(model_path, out_path, convert_hf, converter_python, outtype)
         results.append(out_path)
 
     # Quantize quants — need F16 intermediate, then llama-quantize binary
@@ -231,7 +266,9 @@ def export_gguf(
         f16_path = output_dir / f"{model_name}-F16.gguf"
 
         if not f16_path.exists():
-            convert_hf_to_gguf(model_path, f16_path, convert_hf, "f16")
+            convert_hf_to_gguf(
+                model_path, f16_path, convert_hf, converter_python, "f16"
+            )
 
         for quant in needs_quantize:
             out_path = output_dir / f"{model_name}-{quant}.gguf"
@@ -247,7 +284,14 @@ def export_gguf(
     # encoder), produced once at F16 and paired with any text quant.
     if has_mmproj_encoder(model_path):
         mmproj_path = output_dir / f"mmproj-{model_name}-F16.gguf"
-        convert_hf_to_gguf(model_path, mmproj_path, convert_hf, "f16", mmproj=True)
+        convert_hf_to_gguf(
+            model_path,
+            mmproj_path,
+            convert_hf,
+            converter_python,
+            "f16",
+            mmproj=True,
+        )
         results.append(mmproj_path)
 
     return results

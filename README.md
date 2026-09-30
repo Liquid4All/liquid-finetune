@@ -976,12 +976,20 @@ with LFM2 model support, so SSH access to those repos is required.
 
 Export a HuggingFace checkpoint or PEFT adapter to GGUF with
 `leap-export-gguf`. All exports use the conversion scripts from a llama.cpp
-checkout, so point `LLAMA_CPP_DIR` (or `--llama-cpp-dir`) at one first:
+checkout and its isolated Python environment:
 
 ```bash
+git clone https://github.com/ggml-org/llama.cpp
+cd llama.cpp
+uv venv --seed .venv
+.venv/bin/python -m pip install -r requirements.txt
+
 export LLAMA_CPP_DIR=/path/to/llama.cpp
 uv run leap-export-gguf /path/to/checkpoint --quant F16 --output-dir ./outputs/gguf
 ```
+
+By default, conversion uses `$LLAMA_CPP_DIR/.venv/bin/python`. Override it
+with `LLAMA_CPP_PYTHON` or `--llama-cpp-python`.
 
 Repeat `--quant` to produce multiple outputs:
 
