@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from datasets import Dataset
-from sentence_transformers import SentenceTransformerTrainingArguments
+from sentence_transformers import (
+    MultiVectorEncoderTrainingArguments,
+    SentenceTransformerTrainingArguments,
+)
 import torch
 import torch.distributed as dist
 
@@ -113,17 +116,23 @@ def build_retrieval_training_args(
     *,
     tracker: str,
     job_name: str,
+    multi_vector: bool = False,
 ) -> SentenceTransformerTrainingArguments:
+    args_cls = (
+        MultiVectorEncoderTrainingArguments
+        if multi_vector
+        else SentenceTransformerTrainingArguments
+    )
     filtered, _ = filter_runtime_config_kwargs(
         train_config,
         excluded_keys=RETRIEVAL_RUNTIME_EXCLUDED_KEYS,
-        config_cls=SentenceTransformerTrainingArguments,
+        config_cls=args_cls,
     )
     filtered.setdefault(
         "per_device_eval_batch_size",
         filtered.get("per_device_train_batch_size", 1),
     )
-    return SentenceTransformerTrainingArguments(
+    return args_cls(
         report_to=tracker,
         run_name=job_name,
         **filtered,

@@ -1,11 +1,18 @@
 import logging
 from typing import assert_never, cast
 
-from pylate import evaluation, losses, models, utils
 from leap_finetune.distribution.ray_runtime import normalize_visible_devices  # noqa: F401
 
 from ray.train.huggingface.transformers import prepare_trainer
-from sentence_transformers import SentenceTransformerTrainer
+from sentence_transformers import MultiVectorEncoder, MultiVectorEncoderTrainer
+from sentence_transformers.multi_vector_encoder.evaluation import (
+    MultiVectorInformationRetrievalEvaluator,
+    MultiVectorTripletEvaluator,
+)
+from sentence_transformers.multi_vector_encoder.losses import (
+    CachedMultiVectorMultipleNegativesRankingLoss,
+    MultiVectorMultipleNegativesRankingLoss,
+)
 
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
 from leap_finetune.config.job_config import ColBERTLoss
@@ -29,8 +36,8 @@ from leap_finetune.training.utils.worker_setup import (
 logger = logging.getLogger(__name__)
 
 
-class LFMColBERTTrainer(RayDataLoaderMixin, SentenceTransformerTrainer):
-    """PyLate trainer over Ray-owned dataset shards."""
+class LFMColBERTTrainer(RayDataLoaderMixin, MultiVectorEncoderTrainer):
+    """Sentence Transformers multi-vector trainer over Ray-owned dataset shards."""
 
 
 def _build_evaluator(eval_dataset, batch_size: int):
@@ -38,7 +45,7 @@ def _build_evaluator(eval_dataset, batch_size: int):
         return None
     queries, corpus, relevant_docs = build_ir_evaluation_data(eval_dataset)
     evaluators = [
-        evaluation.PyLateInformationRetrievalEvaluator(
+        MultiVectorInformationRetrievalEvaluator(
             queries=queries,
             corpus=corpus,
             relevant_docs=relevant_docs,
@@ -49,7 +56,7 @@ def _build_evaluator(eval_dataset, batch_size: int):
     ]
     if "negative" in eval_dataset.column_names:
         evaluators.append(
-            evaluation.ColBERTTripletEvaluator(
+            MultiVectorTripletEvaluator(
                 anchors=eval_dataset["query"],
                 positives=eval_dataset["positive"],
                 negatives=eval_dataset["negative"],
@@ -88,29 +95,29 @@ def colbert_run(training_config: dict) -> None:
         train_config,
         tracker=tracker,
         job_name=job_name,
+        multi_vector=True,
     )
-    model = models.ColBERT(
+    model = MultiVectorEncoder(
         model_name_or_path=_resolve_model_id(model_name),
         trust_remote_code=True,
     )
     register_remote_model_for_checkpointing(model)
-    model.tokenizer.pad_token = model.tokenizer.eos_token
 
     gather = train_config["gather_across_devices"]
     temperature = train_config["temperature"]
     loss_name = cast(ColBERTLoss, train_config["loss"])
     if loss_name == "contrastive":
-        loss = losses.Contrastive(
+        loss = MultiVectorMultipleNegativesRankingLoss(
             model=model,
             gather_across_devices=gather,
-            temperature=temperature,
+            scale=1 / temperature,
         )
     elif loss_name == "cached_contrastive":
-        loss = losses.CachedContrastive(
+        loss = CachedMultiVectorMultipleNegativesRankingLoss(
             model=model,
             mini_batch_size=train_config.get("mini_batch_size", 32),
             gather_across_devices=gather,
-            temperature=temperature,
+            scale=1 / temperature,
         )
     else:
         assert_never(loss_name)
@@ -125,7 +132,6 @@ def colbert_run(training_config: dict) -> None:
             eval_dataset,
             args.per_device_eval_batch_size,
         ),
-        data_collator=utils.ColBERTCollator(model.tokenize),
     )
     trainer.add_callback(
         LeapCheckpointCallback(
