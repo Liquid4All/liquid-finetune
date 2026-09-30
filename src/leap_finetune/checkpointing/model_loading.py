@@ -11,7 +11,6 @@ from transformers import (
     AutoProcessor,
     AutoModelForImageTextToText,
 )
-from transformers.image_utils import PILImageResampling
 from transformers.utils import is_flash_attn_2_available
 
 logger = logging.getLogger(__name__)
@@ -300,6 +299,7 @@ def load_model(
 
 def load_vlm_model(
     model_name: str,
+    min_image_tokens: int | None = None,
     max_image_tokens: int | None = None,
     do_image_splitting: bool = True,
 ) -> tuple[AutoModelForImageTextToText, AutoProcessor]:
@@ -308,8 +308,9 @@ def load_vlm_model(
     processor_kwargs = {
         "trust_remote_code": True,
         "do_image_splitting": do_image_splitting,
-        "resample": PILImageResampling.BICUBIC,
     }
+    if min_image_tokens is not None:
+        processor_kwargs["min_image_tokens"] = min_image_tokens
     if max_image_tokens is not None:
         processor_kwargs["max_image_tokens"] = max_image_tokens
 

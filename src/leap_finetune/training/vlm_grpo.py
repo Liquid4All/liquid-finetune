@@ -139,6 +139,7 @@ def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -
     job_name = training_config.get("job_name", "leap-ft-run")
 
     train_config = training_config.get("train_config", {})
+    min_image_tokens = train_config.get("min_image_tokens")
     max_image_tokens = train_config.get("max_image_tokens")
     do_image_splitting = train_config.get("do_image_splitting", True)
     run_name_template = train_config.get("leap_run_name_template")
@@ -179,6 +180,7 @@ def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -
 
     model, processor = load_vlm_model(
         model_name,
+        min_image_tokens=min_image_tokens,
         max_image_tokens=max_image_tokens,
         do_image_splitting=do_image_splitting,
     )

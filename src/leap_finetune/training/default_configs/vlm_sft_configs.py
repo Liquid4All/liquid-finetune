@@ -32,6 +32,7 @@ DEFAULT_LR_MULTIPLIERS = {
 
 DEFAULT_VLM_SFT = {
     "training_type": "vlm_sft",
+    "min_image_tokens": None,  # None = processor default; set int to override
     "max_image_tokens": None,  # None = processor default (256); set int to override
     "do_image_splitting": True,  # for VLMs, split large images into multiple tiles
     "group_by_image_tiles": False,

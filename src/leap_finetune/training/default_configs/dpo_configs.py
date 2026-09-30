@@ -56,6 +56,7 @@ DEFAULT_VLM_DPO = {
     "gradient_checkpointing": True,
     "remove_unused_columns": False,
     "do_image_splitting": True,
+    "min_image_tokens": None,
     "max_image_tokens": 256,
     "group_by_image_tiles": False,
     # Match VLM SFT: keep image/token collation off the training critical path.
