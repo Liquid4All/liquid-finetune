@@ -1,22 +1,23 @@
 import copy
 import logging
 
-from leap_finetune.distribution.ray_runtime import normalize_visible_devices  # noqa: F401
-
+import pyarrow as pa
 import ray
 import ray.data
 import torch
 from datasets import Dataset
-import pyarrow as pa
 from rich.console import Console
-from trl.data_utils import maybe_apply_chat_template, maybe_extract_prompt
-from trl.data_utils import pack_dataset
+from trl.data_utils import maybe_apply_chat_template, maybe_extract_prompt, pack_dataset
 
 from leap_finetune.data_loading.image_loader import load_image
 from leap_finetune.data_loading.validate_tool_format import (
     normalize_messages_for_chat_template,
     normalize_row_for_chat_template,
 )
+from leap_finetune.distribution.ray_runtime import (
+    normalize_visible_devices,  # noqa: F401
+)
+from leap_finetune.loss_weighting.alignment import build_token_loss_weights
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -33,7 +34,7 @@ def _find_template(seq, template):
             yield i
 
 
-def create_vlm_collate_fn(processor):
+def create_vlm_collate_fn(processor, loss_weighting: dict | None = None):
     """Create a collate function with assistant-only label masking.
 
     Only assistant content + <|im_end|> contribute to loss.
@@ -109,14 +110,48 @@ def create_vlm_collate_fn(processor):
             )
 
         try:
+            rendered_texts = (
+                processor.apply_chat_template(valid_samples, tokenize=False)
+                if loss_weighting
+                else None
+            )
+            offset_kwargs = {"return_offsets_mapping": True} if loss_weighting else {}
             batch = processor.apply_chat_template(
                 valid_samples,
                 tokenize=True,
                 return_dict=True,
                 return_tensors="pt",
                 padding=True,
+                **offset_kwargs,
             )
             batch["labels"] = _build_labels(batch["input_ids"])
+            if loss_weighting:
+                if isinstance(rendered_texts, str):
+                    rendered_texts = [rendered_texts]
+                offset_mapping = batch.pop("offset_mapping")
+                weight_rows = []
+                diagnostic_rows = []
+                for conversation, rendered, offsets, labels in zip(
+                    valid_samples,
+                    rendered_texts,
+                    offset_mapping,
+                    batch["labels"],
+                    strict=True,
+                ):
+                    diagnostics = {}
+                    weight_rows.append(
+                        build_token_loss_weights(
+                            messages=conversation,
+                            rendered_text=rendered,
+                            offset_mapping=offsets,
+                            assistant_mask=labels.ne(-100),
+                            config=loss_weighting,
+                            diagnostics=diagnostics,
+                        )
+                    )
+                    diagnostic_rows.append(diagnostics)
+                batch["loss_weights"] = torch.tensor(weight_rows, dtype=torch.float32)
+                batch["_loss_weight_diagnostics"] = diagnostic_rows
             return batch
 
         finally:
@@ -161,6 +196,7 @@ def tokenize_sft(
     max_length: int,
     assistant_only_loss: bool = False,
     completion_only_loss: bool = False,
+    loss_weighting: dict | None = None,
     truncate: bool = True,
 ) -> dict:
     """
@@ -171,8 +207,11 @@ def tokenize_sft(
       - Plain text: row has "text" → tokenizer()
     """
     if "messages" in row:
-        need_masks = assistant_only_loss or completion_only_loss
+        need_masks = assistant_only_loss or completion_only_loss or loss_weighting
         messages = normalize_messages_for_chat_template(row["messages"])
+        chat_template_kwargs = {}
+        if loss_weighting:
+            chat_template_kwargs["tokenizer_kwargs"] = {"return_offsets_mapping": True}
         result = tokenizer.apply_chat_template(
             messages,
             tools=row.get("tools") or None,
@@ -181,13 +220,14 @@ def tokenize_sft(
             max_length=max_length if truncate else None,
             return_dict=need_masks,
             return_assistant_tokens_mask=need_masks,
+            **chat_template_kwargs,
         )
         # apply_chat_template returns BatchEncoding (Mapping, not dict)
         input_ids = result["input_ids"] if hasattr(result, "keys") else result
     elif "text" in row:
-        if assistant_only_loss or completion_only_loss:
+        if assistant_only_loss or completion_only_loss or loss_weighting:
             raise ValueError(
-                "assistant_only_loss/completion_only_loss require conversational "
+                "assistant_only_loss/completion_only_loss/loss_weighting require conversational "
                 "SFT rows with a 'messages' column"
             )
         input_ids = tokenizer(
@@ -201,7 +241,7 @@ def tokenize_sft(
         )
 
     output = {"input_ids": list(input_ids), "length": len(input_ids)}
-    if "messages" in row and (assistant_only_loss or completion_only_loss):
+    if "messages" in row and need_masks:
         assistant_masks = list(result["assistant_masks"])
         if len(assistant_masks) != len(output["input_ids"]):
             raise ValueError(
@@ -224,12 +264,55 @@ def tokenize_sft(
                     "assistant span is not fully truncated. Otherwise, use a "
                     "template that marks the assistant span or turn the flag off."
                 )
-        if assistant_only_loss:
+        if assistant_only_loss or loss_weighting:
             output["assistant_masks"] = assistant_masks
         if completion_only_loss:
             output["completion_mask"] = _final_assistant_span_mask(assistant_masks)
+        if loss_weighting:
+            rendered_text = tokenizer.apply_chat_template(
+                messages,
+                tools=row.get("tools") or None,
+                tokenize=False,
+            )
+            diagnostics = {}
+            output["loss_weights"] = build_token_loss_weights(
+                messages=messages,
+                rendered_text=rendered_text,
+                offset_mapping=result["offset_mapping"],
+                assistant_mask=assistant_masks,
+                config=loss_weighting,
+                diagnostics=diagnostics,
+            )
+            output["_loss_weight_rows"] = 1
+            output["_loss_weight_tokens"] = diagnostics["weighted_token_count"]
+            output["_loss_weight_sum"] = diagnostics["effective_weight_sum"]
+            for index, rule in enumerate(loss_weighting.get("rules", [])):
+                output[f"_loss_weight_rule_{index}"] = int(
+                    diagnostics["rule_matches"][rule["name"]]
+                )
 
     return output
+
+
+def _report_and_drop_loss_weight_diagnostics(ds, config, split):
+    columns = ["_loss_weight_rows", "_loss_weight_tokens", "_loss_weight_sum"]
+    rules = config.get("rules", [])
+    columns.extend(f"_loss_weight_rule_{index}" for index in range(len(rules)))
+    totals = ds.sum(on=columns)
+    rows = int(totals.get("sum(_loss_weight_rows)") or 0)
+    tokens = int(totals.get("sum(_loss_weight_tokens)") or 0)
+    effective_sum = float(totals.get("sum(_loss_weight_sum)") or 0.0)
+    console.print(
+        f"[dim]Loss weighting ({split}): {tokens:,} positive-weight tokens, "
+        f"effective weight {effective_sum:g} across {rows:,} rows[/dim]"
+    )
+    for index, rule in enumerate(rules):
+        matched = int(totals.get(f"sum(_loss_weight_rule_{index})") or 0)
+        console.print(
+            f"[dim]  {rule['name']}: {matched:,} matched / "
+            f"{rows - matched:,} unmatched rows[/dim]"
+        )
+    return ds.drop_columns(columns)
 
 
 def tokenize_and_pack_sft(
@@ -239,7 +322,9 @@ def tokenize_and_pack_sft(
     packing: bool = False,
     assistant_only_loss: bool = False,
     completion_only_loss: bool = False,
+    loss_weighting: dict | None = None,
     drop_overlength: bool = False,
+    diagnostics_label: str = "dataset",
 ) -> ray.data.Dataset:
     """
     Tokenize and optionally pack an SFT dataset.
@@ -257,6 +342,7 @@ def tokenize_and_pack_sft(
             "max_length": max_length,
             "assistant_only_loss": assistant_only_loss,
             "completion_only_loss": completion_only_loss,
+            "loss_weighting": loss_weighting,
             "truncate": not drop_overlength,
         },
     )
@@ -266,6 +352,11 @@ def tokenize_and_pack_sft(
         # silently turn a complete example into a partial supervised target if
         # the active tokenizer/template now renders it over the configured limit.
         ds = ds.filter(lambda row: row["length"] <= max_length)
+
+    if loss_weighting:
+        ds = _report_and_drop_loss_weight_diagnostics(
+            ds, loss_weighting, diagnostics_label
+        )
 
     # === 2. Pack or truncate ===
     if packing:
@@ -279,7 +370,12 @@ def tokenize_and_pack_sft(
             table = pa.concat_tables(tables)
             columns = [
                 name
-                for name in ("input_ids", "assistant_masks", "completion_mask")
+                for name in (
+                    "input_ids",
+                    "assistant_masks",
+                    "completion_mask",
+                    "loss_weights",
+                )
                 if name in table.column_names
             ]
             hf_ds = Dataset(table.select(columns))
@@ -289,7 +385,12 @@ def tokenize_and_pack_sft(
             hf_ds = Dataset.from_generator(ds.iter_rows)
             columns = [
                 name
-                for name in ("input_ids", "assistant_masks", "completion_mask")
+                for name in (
+                    "input_ids",
+                    "assistant_masks",
+                    "completion_mask",
+                    "loss_weights",
+                )
                 if name in hf_ds.column_names
             ]
             hf_ds = hf_ds.select_columns(columns)

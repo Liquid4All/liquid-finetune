@@ -24,6 +24,7 @@ SFT_EXCLUDED_KEYS = {
     "dataset_num_proc",
     "completion_only_loss",
     "assistant_only_loss",
+    "loss_weighting",
 } | (
     BASE_RUNTIME_EXCLUDED_KEYS
     | MODEL_RUNTIME_EXCLUDED_KEYS

@@ -190,6 +190,59 @@ def test_vlm_collator_closes_batch_image_copy(tmp_path, monkeypatch):
         processor.images_seen[0].getpixel((0, 0))
 
 
+class _WeightedProcessor:
+    tokenizer = _FakeTokenizer()
+
+    def apply_chat_template(self, messages, *, tokenize, **kwargs):
+        del kwargs
+        if not tokenize:
+            return ["product_category: Shoes" for _ in messages]
+        return {
+            "input_ids": torch.tensor([[1, 2, 10, 3]]),
+            "offset_mapping": torch.tensor([[[0, 0], [0, 0], [0, 23], [0, 0]]]),
+        }
+
+
+def test_vlm_collator_emits_semantic_weights_and_rule_diagnostics():
+    collate = create_vlm_collate_fn(
+        _WeightedProcessor(),
+        loss_weighting={
+            "default_weight": 0.2,
+            "rules": [
+                {
+                    "name": "category",
+                    "selector": {
+                        "type": "key_value_line",
+                        "key": "product_category",
+                    },
+                    "weight": 1.0,
+                }
+            ],
+        },
+    )
+    sample = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "product_category: Shoes"}],
+            }
+        ]
+    }
+
+    batch = collate([sample])
+
+    torch.testing.assert_close(
+        batch["loss_weights"], torch.tensor([[0.0, 0.0, 1.0, 0.2]])
+    )
+    assert batch["_loss_weight_diagnostics"] == [
+        {
+            "weighted_token_count": 2,
+            "effective_weight_sum": 1.2,
+            "rule_matches": {"category": True},
+        }
+    ]
+
+
 def test_load_image_closes_http_response(tmp_path, monkeypatch):
     image_path = tmp_path / "remote.png"
     _write_image(image_path)

@@ -1,38 +1,40 @@
 import logging
 
+import torch
 from transformers import Trainer, TrainingArguments
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
-from leap_finetune.training.default_configs.sft_configs import SFT_EXCLUDED_KEYS
-from leap_finetune.training.utils.worker_setup import (
-    default_eval_batch_size,
-    resolve_train_eval_datasets,
-    init_tracking_from_config,
-    load_causal_lm_for_training,
-)
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
 from leap_finetune.evaluation import (
     create_llm_benchmarks_from_config,
     make_eval_callback,
 )
-from leap_finetune.training.utils.logging import (
-    finish_tracker,
-    get_wandb_run_id,
-    is_rank_zero,
-)
+from leap_finetune.training.default_configs.sft_configs import SFT_EXCLUDED_KEYS
 from leap_finetune.training.peft.peft import (
     apply_peft_to_model,
     load_peft_adapter,
     merge_and_save_peft_model,
 )
-from leap_finetune.training.utils.trainer_mixins import (
-    CausalLMLossTokenCountMixin,
-    RayDataLoaderMixin,
+from leap_finetune.training.utils.config_filter import filter_runtime_config_kwargs
+from leap_finetune.training.utils.logging import (
+    finish_tracker,
+    get_wandb_run_id,
+    is_rank_zero,
 )
 from leap_finetune.training.utils.trainer_lifecycle import (
     run_training_safely,
 )
-from leap_finetune.training.utils.config_filter import filter_runtime_config_kwargs
+from leap_finetune.training.utils.trainer_mixins import (
+    CausalLMLossTokenCountMixin,
+    RayDataLoaderMixin,
+    TokenWeightedLossMixin,
+)
+from leap_finetune.training.utils.worker_setup import (
+    default_eval_batch_size,
+    init_tracking_from_config,
+    load_causal_lm_for_training,
+    resolve_train_eval_datasets,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +44,10 @@ class LFMDataCollatorForLanguageModeling(DataCollatorForLanguageModeling):
 
     def torch_call(self, examples):
         masked_examples = []
+        weight_rows = []
         for example in examples:
             item = dict(example)
+            weight_rows.append(item.pop("loss_weights", None))
             masks = [
                 item.pop(name)
                 for name in ("assistant_masks", "completion_mask")
@@ -59,19 +63,49 @@ class LFMDataCollatorForLanguageModeling(DataCollatorForLanguageModeling):
                     for index, label in enumerate(labels)
                 ]
             masked_examples.append(item)
-        return super().torch_call(masked_examples)
+        batch = super().torch_call(masked_examples)
+
+        if any(weights is not None for weights in weight_rows):
+            if not all(weights is not None for weights in weight_rows):
+                raise ValueError("loss_weights must be present on every example")
+            for weights, example in zip(weight_rows, masked_examples, strict=True):
+                if len(weights) != len(example["input_ids"]):
+                    raise ValueError("loss_weights length must match input_ids")
+            if self.padding_free:
+                loss_weights = torch.tensor(
+                    [[weight for row in weight_rows for weight in row]],
+                    dtype=torch.float32,
+                )
+            else:
+                loss_weights = torch.zeros_like(batch["labels"], dtype=torch.float32)
+                padding_side = getattr(self, "_leap_padding_side", "right")
+                for index, weights in enumerate(weight_rows):
+                    start = (
+                        0
+                        if padding_side == "right"
+                        else loss_weights.size(1) - len(weights)
+                    )
+                    loss_weights[index, start : start + len(weights)] = torch.tensor(
+                        weights, dtype=torch.float32
+                    )
+            batch["loss_weights"] = loss_weights * batch["labels"].ne(-100)
+        return batch
 
 
-class LFMSFTTrainer(RayDataLoaderMixin, CausalLMLossTokenCountMixin, Trainer):
+class LFMSFTTrainer(
+    RayDataLoaderMixin, TokenWeightedLossMixin, CausalLMLossTokenCountMixin, Trainer
+):
     """SFT trainer with Ray-sharded data loaders."""
 
 
 def build_sft_data_collator(tokenizer, train_config: dict):
     padding_free = train_config.get("padding_free", train_config.get("packing", False))
-    return LFMDataCollatorForLanguageModeling(
+    collator = LFMDataCollatorForLanguageModeling(
         pad_token_id=tokenizer.pad_token_id or tokenizer.eos_token_id,
         padding_free=padding_free,
     )
+    collator._leap_padding_side = getattr(tokenizer, "padding_side", "right")
+    return collator
 
 
 def sft_run(training_config: dict, train_dataset=None, eval_dataset=None) -> None:
@@ -109,6 +143,8 @@ def sft_run(training_config: dict, train_dataset=None, eval_dataset=None) -> Non
     )
 
     default_eval_batch_size(train_config_filtered)
+    if train_config.get("loss_weighting"):
+        train_config_filtered["average_tokens_across_devices"] = True
 
     config_kwargs = {
         "report_to": tracker,
@@ -131,6 +167,7 @@ def sft_run(training_config: dict, train_dataset=None, eval_dataset=None) -> Non
 
     data_collator = build_sft_data_collator(tokenizer, train_config)
     trainer = LFMSFTTrainer(
+        token_weighting=train_config.get("loss_weighting"),
         model=model,
         processing_class=tokenizer,
         args=training_args,
