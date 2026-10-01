@@ -7,7 +7,9 @@ from datasets import Dataset
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from leap_finetune.data_loading.dataset_loader import DatasetLoader
+from leap_finetune.data_processing.config import PreprocessingOperation
 from leap_finetune.evaluation.async_eval_config import AsyncEvalConfig
+from leap_finetune.loss_weighting.config import LossWeightingConfig
 
 TrainingType = Literal[
     "sft",
@@ -70,6 +72,8 @@ class DatasetConfig(BaseModel):
     image_root: str | None = None
     cache_dataset: bool = False
     hf_streaming_batch_size: int = 10000
+    preprocessing: list[PreprocessingOperation] = Field(default_factory=list)
+    preprocessing_report_path: str | None = None
 
     @model_validator(mode="after")
     def _validate_dataset(self) -> DatasetConfig:
@@ -120,6 +124,7 @@ class TrainingConfig(BaseModel):
     chat_template_path: str | None = None
     adapter_path: str | None = None
     completion_only_loss: bool | None = None
+    loss_weighting: LossWeightingConfig | None = None
     loss: RetrievalLoss | None = None
     prompts: RetrievalPrompts | None = None
     temperature: float | None = Field(default=None, gt=0)

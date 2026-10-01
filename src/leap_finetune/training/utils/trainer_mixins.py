@@ -1,20 +1,24 @@
 import logging
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
+from leap_finetune.checkpointing.manual_sharded import (
+    MANUAL_SHARDED_CHECKPOINT_FORMATS,
+    finalize_manual_sharded_export_metadata,
+    load_manual_sharded_model_checkpoint,
+    load_manual_sharded_optimizer_checkpoint,
+    normalize_manual_sharded_checkpoint_format,
+    save_manual_sharded_checkpoint,
+    save_manual_sharded_model_export,
+)
 from leap_finetune.data_loading.length_grouping import (
     get_length_grouped_sampler,
     get_tile_count_grouped_sampler,
 )
-from leap_finetune.checkpointing.manual_sharded import (
-    finalize_manual_sharded_export_metadata,
-    load_manual_sharded_model_checkpoint,
-    load_manual_sharded_optimizer_checkpoint,
-    MANUAL_SHARDED_CHECKPOINT_FORMATS,
-    normalize_manual_sharded_checkpoint_format,
-    save_manual_sharded_checkpoint,
-    save_manual_sharded_model_export,
+from leap_finetune.loss_weighting.loss import (
+    weighted_causal_lm_loss,
 )
 
 logger = logging.getLogger(__name__)
@@ -127,6 +131,160 @@ class CausalLMLossTokenCountMixin:
             shifted_batch["labels"] = batch["labels"][..., 1:]
             shifted_samples.append(shifted_batch)
         return super()._get_num_items_in_batch(shifted_samples, device)
+
+
+class TokenWeightedLossMixin:
+    """Compute weighted causal CE and gather its denominator across workers."""
+
+    def __init__(self, *args, token_weighting=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._leap_token_weighting = token_weighting or None
+        self._leap_weight_diagnostics = {}
+        if self._leap_token_weighting:
+            # Trainer must not divide each microbatch by gradient accumulation;
+            # our denominator already covers the complete accumulated batch.
+            self.model_accepts_loss_kwargs = True
+
+    def _loss_weight_rule_names(self):
+        config = self._leap_token_weighting
+        if not isinstance(config, dict):
+            return []
+        return [rule["name"] for rule in config.get("rules", [])]
+
+    @staticmethod
+    def _diagnostic_state_template():
+        return {
+            "rows": 0.0,
+            "tokens": 0.0,
+            "weight": 0.0,
+            "unweighted_numerator": 0.0,
+            "unweighted_denominator": 0.0,
+            "rule_rows": 0.0,
+            "rule_matches": {},
+        }
+
+    def _diagnostic_state(self, phase):
+        return self._leap_weight_diagnostics.setdefault(
+            phase, self._diagnostic_state_template()
+        )
+
+    def _get_num_items_in_batch(self, batch_samples, device):
+        if not batch_samples or "loss_weights" not in batch_samples[0]:
+            return super()._get_num_items_in_batch(batch_samples, device)
+
+        effective_weight = torch.zeros((), dtype=torch.float32, device=device)
+        for batch in batch_samples:
+            labels = batch["labels"][..., 1:].to(device)
+            weights = batch["loss_weights"][..., 1:].to(device)
+            effective_weight = effective_weight + (weights * labels.ne(-100)).sum()
+
+        if getattr(self.args, "average_tokens_across_devices", False):
+            effective_weight = self.accelerator.gather(effective_weight).sum()
+        return effective_weight
+
+    def compute_loss(
+        self,
+        model,
+        inputs,
+        return_outputs=False,
+        num_items_in_batch=None,
+    ):
+        row_diagnostics = inputs.pop("_loss_weight_diagnostics", None)
+        loss_weights = inputs.pop("loss_weights", None)
+        if loss_weights is None:
+            return super().compute_loss(
+                model,
+                inputs,
+                return_outputs=return_outputs,
+                num_items_in_batch=num_items_in_batch,
+            )
+
+        labels = inputs.pop("labels")
+        outputs = model(**inputs)
+        logits = outputs["logits"] if isinstance(outputs, dict) else outputs.logits
+        loss = weighted_causal_lm_loss(
+            logits,
+            labels,
+            loss_weights,
+            num_items_in_batch=num_items_in_batch,
+        )
+        self._record_loss_weight_diagnostics(
+            model, logits, labels, loss_weights, row_diagnostics
+        )
+        if self.args.average_tokens_across_devices and num_items_in_batch is not None:
+            # DDP averages gradients. Match Trainer.compute_loss by restoring
+            # the process factor after normalizing by the global denominator.
+            process_count = (
+                self.args.n_gpu
+                if self.args.n_gpu > 1
+                else self.accelerator.num_processes
+            )
+            loss = loss * process_count
+        return (loss, outputs) if return_outputs else loss
+
+    def _record_loss_weight_diagnostics(
+        self, model, logits, labels, loss_weights, row_diagnostics
+    ):
+        phase = "train" if getattr(model, "training", True) else "eval"
+        state = self._diagnostic_state(phase)
+        shifted_labels = labels[..., 1:]
+        shifted_weights = loss_weights[..., 1:].to(
+            device=shifted_labels.device, dtype=torch.float32
+        )
+        valid = shifted_labels.ne(-100)
+        effective = shifted_weights * valid
+        state["rows"] += float(labels.shape[0])
+        state["tokens"] += float(((shifted_weights > 0) & valid).sum().item())
+        state["weight"] += float(effective.sum().item())
+
+        if phase == "eval":
+            token_loss = F.cross_entropy(
+                logits[..., :-1, :].float().reshape(-1, logits.size(-1)),
+                shifted_labels.reshape(-1),
+                reduction="none",
+                ignore_index=-100,
+            ).view_as(shifted_labels)
+            state["unweighted_numerator"] += float((token_loss * valid).sum().item())
+            state["unweighted_denominator"] += float(valid.sum().item())
+
+        if row_diagnostics:
+            state["rule_rows"] += float(len(row_diagnostics))
+            matches = state["rule_matches"]
+            for diagnostics in row_diagnostics:
+                for name, matched in diagnostics.get("rule_matches", {}).items():
+                    matches[name] = matches.get(name, 0.0) + float(bool(matched))
+
+    def log(self, logs, *args, **kwargs):
+        phase = "eval" if any(key.startswith("eval_") for key in logs) else "train"
+        state = self._leap_weight_diagnostics.get(phase)
+        if state and state["rows"]:
+            rule_names = self._loss_weight_rule_names()
+            values = [
+                state["rows"],
+                state["tokens"],
+                state["weight"],
+                state["unweighted_numerator"],
+                state["unweighted_denominator"],
+                state["rule_rows"],
+                *(state["rule_matches"].get(name, 0.0) for name in rule_names),
+            ]
+            totals = torch.tensor(values, dtype=torch.float64, device=self.args.device)
+            if self.accelerator.num_processes > 1:
+                totals = self.accelerator.reduce(totals, reduction="sum")
+            totals = totals.cpu().tolist()
+            rows, tokens, weight, unweighted_num, unweighted_den, rule_rows = totals[:6]
+            prefix = f"{phase}_loss_weight"
+            logs[f"{prefix}/weighted_tokens"] = tokens
+            logs[f"{prefix}/effective_weight_sum"] = weight
+            logs[f"{prefix}/rows"] = rows
+            if phase == "eval" and unweighted_den:
+                logs["eval_unweighted_loss"] = unweighted_num / unweighted_den
+            if rule_rows:
+                for name, matched in zip(rule_names, totals[6:], strict=True):
+                    logs[f"{prefix}/{name}_matched_rows"] = matched
+                    logs[f"{prefix}/{name}_unmatched_rows"] = rule_rows - matched
+            self._leap_weight_diagnostics[phase] = self._diagnostic_state_template()
+        return super().log(logs, *args, **kwargs)
 
 
 def validate_manual_sharded_training_args(

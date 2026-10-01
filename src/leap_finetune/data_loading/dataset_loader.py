@@ -39,6 +39,8 @@ class DatasetLoader:
     image_root: str | None = None
     cache_dataset: bool = False
     hf_streaming_batch_size: int = 10000
+    preprocessing: list[dict] = field(default_factory=list)
+    preprocessing_report_path: str | None = None
     _validated: bool = field(default=False, repr=False)
 
     def __post_init__(self):

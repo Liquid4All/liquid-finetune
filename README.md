@@ -470,6 +470,105 @@ for HuggingFace datasets with multiple configs, `split` for HF split
 expressions such as `train+validation`, and `limit` to cap samples for quick
 testing.
 
+### Distributed preprocessing
+
+`dataset.preprocessing` applies an ordered graph of user functions through Ray
+Data before tokenization. A callable can use an installed module path or a
+Python file path relative to the job YAML; no expression evaluation is used.
+
+```yaml
+dataset:
+  path: ./data/catalog.parquet
+  type: sft
+  preprocessing_report_path: ./reports/preprocessing.json
+  preprocessing:
+    - op: map
+      callable: ./recipes/catalog.py:rename_fields
+
+    - op: filter
+      callable: ./recipes/catalog.py:is_usable
+      kwargs:
+        require_image: true
+
+    - op: flat_map
+      callable: ./recipes/catalog.py:augment
+      kwargs:
+        copies: 2
+
+    - op: map_batches
+      callable: ./recipes/catalog.py:build_messages
+      batch_size: 512
+      batch_format: pyarrow
+      num_cpus: 1
+      fingerprint:
+        taxonomy_sha256: <content hash of an external taxonomy>
+```
+
+Functions receive one row for `map`, `filter`, and `flat_map`, or one batch for
+`map_batches`. They may optionally accept a `context` keyword argument:
+
+```python
+def rename_fields(row, *, context):
+    return {
+        **row,
+        "title": row["standardized_title"],
+        "source_split": context.split,
+    }
+
+
+def is_usable(row, *, require_image=False):
+    return bool(row["title"]) and (not require_image or bool(row.get("image")))
+
+
+def augment(row, *, copies, context):
+    return [
+        {**row, "augmentation_index": index, "seed": context.seed}
+        for index in range(copies)
+    ]
+```
+
+`context` contains the deterministic job seed, split, hook stage, and operation
+index. Keep transforms pure and derive row-level randomness from that seed plus
+a stable source ID; do not depend on Ray block order.
+
+Global state is explicit through an optional two-phase operation. A
+`fit_callable` receives the Ray Dataset and returns a compact artifact; Leap
+then passes that artifact to the transform as the `artifact` keyword:
+
+```yaml
+- op: map
+  fit_callable: ./recipes/catalog.py:fit_taxonomy
+  fit_kwargs:
+    minimum_count: 20
+  callable: ./recipes/catalog.py:apply_taxonomy
+```
+
+The fit function runs once on the driver but should use Ray Dataset aggregates
+so the data stays distributed. Its artifact, callable source, kwargs, and any
+external hashes in `fingerprint` become explicit reproducibility inputs.
+
+The supported hook stages are:
+
+| Stage                        | Runs                                                       |
+| ---------------------------- | ---------------------------------------------------------- |
+| `raw_pre_normalize`          | Immediately after loading; default and most general hook   |
+| `normalized_pre_validate`    | After built-in column/image-path normalization             |
+| `post_validate_pre_tokenize` | After invalid rows are filtered, immediately before tokens |
+
+Transforms stay in Ray's lazy distributed pipeline and source columns are
+preserved unless a recipe removes them. Any transform that changes messages or
+image paths must run before validation, not in
+`post_validate_pre_tokenize`. Expensive transforms should not run in a
+collator because that repeats them every epoch.
+
+With `dataset.cache_dataset: true`, the resolved operation graph, callable
+source hash, kwargs, seed, source configuration, and optional `fingerprint`
+metadata participate in the tokenization-cache key. Put hashes for external
+taxonomy/model artifacts in `fingerprint`; cache storage uses Leap's persistent
+cache directory, never `/tmp`. When `preprocessing_report_path` is set, Leap
+also writes schemas and row counts before/after every user operation, row deltas,
+output counts, the deterministic seed, graph fingerprint, and cache status.
+
 ### SFT
 
 ```json
@@ -1055,6 +1154,70 @@ assistant completion. These options require a chat template with
 `{% generation %}` and `{% endgeneration %}` markers around assistant output;
 the bundled LFM templates include them. They are not used for plain-text SFT
 rows.
+
+### Semantic token weighting
+
+Conversational SFT, MoE SFT, and VLM SFT can assign a nonnegative float weight
+to each supervised token. This supports selective masking (`0.0`) as well as
+relative emphasis without changing logits or the default training path.
+
+```yaml
+training_config:
+  extends: DEFAULT_SFT
+  loss_weighting:
+    default_weight: 0.2
+    token_boundary: overlap
+    overlap_strategy: last_wins
+    zero_weight_action: error
+    rules:
+      - name: product_category
+        selector:
+          type: key_value_line
+          key: product_category
+          include_key: true
+          include_delimiter: true
+          include_value: true
+        weight: 1.0
+      - name: json_category
+        selector:
+          type: json_pointer
+          pointer: /catalog/category
+          include_key: false
+          include_delimiter: false
+        weight: 1.0
+```
+
+`default_weight` applies to assistant tokens that match no rule; prompt, image,
+padding, and other ignored tokens always receive weight `0.0`. The loss shifts
+labels and weights together and divides by the sum of valid weights, so uniform
+`1.0` weighting is equivalent to standard causal cross entropy.
+
+Common modes are:
+
+- emphasis: selected fields `1.0`, all other assistant output `0.2`;
+- selected-only masking: selected fields `1.0`, default `0.0`;
+- uniform: no rules and default `1.0`.
+
+The selector types are:
+
+| Type             | Selection                                        |
+| ---------------- | ------------------------------------------------ |
+| `key_value_line` | Markdown/YAML-like `key: value` lines            |
+| `json_pointer`   | A field or array item addressed by JSON Pointer  |
+| `regex`          | Every match of a numbered or named capture group |
+| `callable`       | An imported function for nonstandard formats     |
+
+A callable selector receives the final assistant string plus configured
+keyword arguments and returns `(start, end)` character spans (or dictionaries
+with `start` and `end`). File references are resolved relative to the job YAML.
+
+Spans are found in final rendered assistant text and aligned against offsets
+from the exact tokenizer/chat-template path. `token_boundary: overlap` includes
+tokens touching any selected character; `contained` requires full containment.
+Rules are ordered and later matches win. `zero_weight_action` controls whether
+a row with no positive supervised weight raises, warns, or is allowed. Training
+logs weighted-token and effective-weight totals; evaluation also logs
+`eval_unweighted_loss`, and VLM runs report per-rule matched/unmatched rows.
 
 ## Contributing
 

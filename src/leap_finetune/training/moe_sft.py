@@ -35,6 +35,7 @@ from leap_finetune.training.moe_utils.memory_trace import (
 from leap_finetune.training.utils.trainer_mixins import (
     CausalLMLossTokenCountMixin,
     ManualShardedCheckpointMixin,
+    TokenWeightedLossMixin,
     validate_manual_sharded_training_args,
 )
 from leap_finetune.training.utils.trainer_lifecycle import run_training_safely
@@ -71,7 +72,10 @@ MOE_SFT_EXCLUDED_KEYS = SFT_EXCLUDED_KEYS | {
 
 
 class LFMMoeSFTTrainer(
-    CausalLMLossTokenCountMixin, ManualShardedCheckpointMixin, Trainer
+    TokenWeightedLossMixin,
+    CausalLMLossTokenCountMixin,
+    ManualShardedCheckpointMixin,
+    Trainer,
 ):
     """SFT Trainer for MoE models with EP/FSDP2 support."""
 
@@ -219,6 +223,8 @@ def moe_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
         resume_from_checkpoint=resume_from,
     )
     default_eval_batch_size(train_config_filtered)
+    if train_config.get("loss_weighting"):
+        train_config_filtered["average_tokens_across_devices"] = True
 
     config_kwargs = {
         "report_to": tracker,
@@ -329,6 +335,7 @@ def moe_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
     )
 
     trainer = LFMMoeSFTTrainer(
+        token_weighting=train_config.get("loss_weighting"),
         ep_config=ep_config,
         manual_fsdp2=(use_ep or use_fsdp2),
         run_name_template=run_name_template,

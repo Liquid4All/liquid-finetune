@@ -8,12 +8,11 @@ from leap_finetune.training.utils.config_filter import (
     VLM_RUNTIME_EXCLUDED_KEYS,
 )
 
-
 ########################
 #     SFT CONFIGS      #
 ########################
 
-VLM_SFT_EXCLUDED_KEYS = (
+VLM_SFT_EXCLUDED_KEYS = {"loss_weighting"} | (
     BASE_RUNTIME_EXCLUDED_KEYS
     | MODEL_RUNTIME_EXCLUDED_KEYS
     | DISTRIBUTED_RUNTIME_EXCLUDED_KEYS

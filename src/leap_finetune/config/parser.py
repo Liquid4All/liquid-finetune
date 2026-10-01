@@ -21,6 +21,7 @@ from leap_finetune.config.job_config import (
     _ResolvedConfigValue,
 )
 from leap_finetune.data_loading.dataset_loader import DatasetLoader
+from leap_finetune.data_processing.importing import resolve_callable_reference
 from leap_finetune.training.default_configs import PEFT_DEFAULTS, TRAINING_DEFAULTS
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,14 @@ def _resolve_local_path(value: str | None, *, base_dir: pathlib.Path) -> str | N
             return str(candidate.resolve())
 
     return value
+
+
+def _resolve_output_path(value: str | None, *, base_dir: pathlib.Path) -> str | None:
+    """Resolve a config-owned output path even before the file exists."""
+    if not value:
+        return value
+    expanded = pathlib.Path(value).expanduser()
+    return str((expanded if expanded.is_absolute() else base_dir / expanded).resolve())
 
 
 def _load_yaml_config(path_obj: pathlib.Path) -> dict[str, Any]:
@@ -294,6 +303,21 @@ def _build_dataset_loader(
     ):
         test_size = 0.01
 
+    preprocessing = []
+    for operation in dataset_cfg.preprocessing:
+        value = operation.runtime_dict()
+        value["callable"] = resolve_callable_reference(
+            operation.callable, base_dir=config_dir
+        )
+        if operation.fit_callable:
+            value["fit_callable"] = resolve_callable_reference(
+                operation.fit_callable, base_dir=config_dir
+            )
+        preprocessing.append(value)
+    preprocessing_report_path = _resolve_output_path(
+        dataset_cfg.preprocessing_report_path, base_dir=config_dir
+    )
+
     return DatasetLoader(
         dataset_path=effective_train_path,
         dataset_type=ds_type,
@@ -305,9 +329,11 @@ def _build_dataset_loader(
         val_dataset_path=val_path,
         val_split=val_split,
         val_subset=val_subset,
-        image_root=dataset_cfg.image_root,
+        image_root=_resolve_local_path(dataset_cfg.image_root, base_dir=config_dir),
         cache_dataset=dataset_cfg.cache_dataset,
         hf_streaming_batch_size=dataset_cfg.hf_streaming_batch_size,
+        preprocessing=preprocessing,
+        preprocessing_report_path=preprocessing_report_path,
     )
 
 
@@ -483,6 +509,19 @@ def _create_output_dir(
         return fallback_dir
 
 
+def _resolve_loss_weighting_paths(config: dict, base_dir: pathlib.Path) -> None:
+    loss_weighting = config.get("loss_weighting")
+    if not isinstance(loss_weighting, dict):
+        return
+    for rule in loss_weighting.get("rules", []):
+        selector = rule.get("selector", {})
+        reference = selector.get("callable")
+        if selector.get("type") == "callable" and isinstance(reference, str):
+            selector["callable"] = resolve_callable_reference(
+                reference, base_dir=base_dir
+            )
+
+
 def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
     config_dir = pathlib.Path(job_config.config_dir or pathlib.Path.cwd()).resolve()
     model_name = job_config.model_name
@@ -512,6 +551,16 @@ def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
         final_train_values.get("adapter_path"),
         base_dir=config_dir,
     )
+    _resolve_loss_weighting_paths(final_train_values, config_dir)
+    if final_train_values.get("loss_weighting") and training_type not in {
+        "sft",
+        "moe_sft",
+        "vlm_sft",
+    }:
+        raise ValueError(
+            "training_config.loss_weighting is supported only for sft, moe_sft, "
+            "and vlm_sft"
+        )
 
     peft_dict = (
         job_config.peft_config.model_dump(exclude_none=True)
@@ -617,11 +666,23 @@ def normalized_job_config_dict(
     for key in ("path", "train_path", "val_path", "image_root"):
         if isinstance(dataset_cfg.get(key), str):
             dataset_cfg[key] = _resolve_local_path(dataset_cfg[key], base_dir=base_dir)
+    if isinstance(dataset_cfg.get("preprocessing_report_path"), str):
+        dataset_cfg["preprocessing_report_path"] = _resolve_output_path(
+            dataset_cfg["preprocessing_report_path"], base_dir=base_dir
+        )
+    for operation in dataset_cfg.get("preprocessing", []):
+        for key in ("callable", "fit_callable"):
+            reference = operation.get(key)
+            if isinstance(reference, str):
+                operation[key] = resolve_callable_reference(
+                    reference, base_dir=base_dir
+                )
 
     train_cfg = payload.get("training_config", {})
     for key in ("chat_template_path", "adapter_path"):
         if isinstance(train_cfg.get(key), str):
             train_cfg[key] = _resolve_local_path(train_cfg[key], base_dir=base_dir)
+    _resolve_loss_weighting_paths(train_cfg, base_dir)
 
     benchmark_cfg = payload.get("evals", {})
     if isinstance(benchmark_cfg.get("image_root"), str):

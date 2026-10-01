@@ -6,15 +6,22 @@ import shutil
 import uuid
 from pathlib import Path
 
-from leap_finetune.distribution.ray_runtime import normalize_visible_devices  # noqa: F401
-
+import pyarrow as pa
 import ray
 import ray.data
-import pyarrow as pa
 from datasets import Dataset
 from rich.console import Console
 
 from leap_finetune import TOKENIZATION_CACHE_DIR
+from leap_finetune.data_processing.fingerprint import preprocessing_fingerprint_data
+from leap_finetune.loss_weighting.fingerprint import loss_weighting_fingerprint_data
+from leap_finetune.data_processing.pipeline import (
+    apply_preprocessing,
+    validate_preprocessing,
+)
+from leap_finetune.distribution.ray_runtime import (
+    normalize_visible_devices,  # noqa: F401
+)
 
 from .dataset_loader import DatasetLoader
 from .tokenize_data import tokenize_and_pack_sft, tokenize_dpo_dataset
@@ -54,6 +61,10 @@ def create_ray_datasets(
     console = Console()
     use_pretokenize = tokenizer is not None and training_config is not None
     can_cache = use_pretokenize and loader.cache_dataset
+    preprocessing_report = [] if loader.preprocessing_report_path else None
+    cache_status = "disabled" if not can_cache else "miss"
+    if loader.preprocessing:
+        validate_preprocessing(loader.preprocessing)
     fingerprint, cache_key = _build_tokenization_cache_key_if_needed(
         loader,
         shuffle_seed=shuffle_seed,
@@ -68,6 +79,14 @@ def create_ray_datasets(
         if cached is not None:
             train_ds, eval_ds = cached
             _print_cache_hit(console, fingerprint, train_ds, eval_ds)
+            _write_preprocessing_report(
+                loader,
+                preprocessing_report,
+                cache_status="hit",
+                shuffle_seed=shuffle_seed,
+                train_ds=train_ds,
+                eval_ds=eval_ds,
+            )
             return train_ds, eval_ds
         logger.info(
             "Tokenization cache miss (%s), will tokenize and cache", fingerprint
@@ -75,7 +94,11 @@ def create_ray_datasets(
 
     # === Load / Normalize / Filter / Split ===
     train_ds, eval_ds = _load_and_prepare_datasets(
-        loader, shuffle_seed, console, training_config or {}
+        loader,
+        shuffle_seed,
+        console,
+        training_config or {},
+        preprocessing_report=preprocessing_report,
     )
 
     # === Tokenize / Pack ===
@@ -93,13 +116,59 @@ def create_ray_datasets(
     if fingerprint is not None:
         try:
             _save_tokenization_cache(fingerprint, train_ds, eval_ds, cache_key)
+            cache_status = "written"
             console.print(f"[dim]Cached tokenized data ({fingerprint})[/dim]")
         except Exception:
+            cache_status = "write_failed"
             logger.warning(
                 "Failed to write tokenization cache, continuing without cache"
             )
 
+    _write_preprocessing_report(
+        loader,
+        preprocessing_report,
+        cache_status=cache_status,
+        shuffle_seed=shuffle_seed,
+        train_ds=train_ds,
+        eval_ds=eval_ds,
+    )
     return train_ds, eval_ds
+
+
+def _write_preprocessing_report(
+    loader,
+    records,
+    *,
+    cache_status,
+    shuffle_seed,
+    train_ds,
+    eval_ds,
+):
+    if records is None or not loader.preprocessing_report_path:
+        return
+    path = Path(loader.preprocessing_report_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "source": {
+            "path": loader.dataset_path,
+            "subset": loader.subset,
+            "split": loader.split,
+            "validation_path": loader.val_dataset_path,
+            "validation_subset": loader.val_subset,
+            "validation_split": loader.val_split,
+        },
+        "seed": shuffle_seed,
+        "cache_status": cache_status,
+        "preprocessing": preprocessing_fingerprint_data(loader.preprocessing),
+        "operations": records,
+        "outputs": {
+            "train_rows": train_ds.count(),
+            "train_schema": str(train_ds.schema()),
+            "eval_rows": eval_ds.count() if eval_ds is not None else 0,
+            "eval_schema": str(eval_ds.schema()) if eval_ds is not None else None,
+        },
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def ray_dataset_to_hf(ray_ds) -> Dataset | None:
@@ -145,10 +214,12 @@ def _load_and_prepare_datasets(
     shuffle_seed: int,
     console: Console,
     training_config: dict,
+    *,
+    preprocessing_report: list[dict] | None = None,
 ) -> tuple[ray.data.Dataset, ray.data.Dataset | None]:
     """Load raw data, normalize/filter rows, shuffle, and build train/eval splits."""
 
-    if not _should_skip_quick_validate():
+    if not loader.preprocessing and not _should_skip_quick_validate():
         loader.quick_validate()
     if loader.dataset_type in ("vlm_sft", "vlm_dpo"):
         console.print(
@@ -157,7 +228,11 @@ def _load_and_prepare_datasets(
 
     if loader.val_dataset_path is not None or loader.val_split is not None:
         return _load_explicit_train_eval_datasets(
-            loader, shuffle_seed, console, training_config
+            loader,
+            shuffle_seed,
+            console,
+            training_config,
+            preprocessing_report=preprocessing_report,
         )
 
     ds = _shuffle_raw_dataset(
@@ -168,6 +243,9 @@ def _load_and_prepare_datasets(
                 subset=loader.subset,
                 split=loader.split,
             ),
+            split="train",
+            shuffle_seed=shuffle_seed,
+            preprocessing_report=preprocessing_report,
         ),
         shuffle_seed,
         training_config,
@@ -206,12 +284,34 @@ def _load_and_prepare_datasets(
 def _normalize_and_filter_dataset(
     loader: DatasetLoader,
     ds: ray.data.Dataset,
+    *,
+    split: str,
+    shuffle_seed: int,
+    preprocessing_report: list[dict] | None = None,
 ) -> ray.data.Dataset:
     """Normalize and filter a raw Ray dataset."""
+    ds = apply_preprocessing(
+        ds,
+        loader.preprocessing,
+        stage="raw_pre_normalize",
+        split=split,
+        seed=shuffle_seed,
+        report=preprocessing_report,
+    )
+
     # Normalize column names/formats before filtering
     # (handles JSON string conversations, column renames, image_root prefix)
     normalizer = normalize_columns(loader.dataset_type, image_root=loader.image_root)
     ds = ds.map(normalizer)
+
+    ds = apply_preprocessing(
+        ds,
+        loader.preprocessing,
+        stage="normalized_pre_validate",
+        split=split,
+        seed=shuffle_seed,
+        report=preprocessing_report,
+    )
 
     model_family = "lfm2"
     if loader.dataset_type in ("sft", "dpo"):
@@ -224,7 +324,15 @@ def _normalize_and_filter_dataset(
 
     # Filter invalid rows using Ray's native filter (pure Python, Ray handles Arrow)
     row_filter = get_row_filter(loader.dataset_type, model_family=model_family)
-    return ds.filter(row_filter)
+    ds = ds.filter(row_filter)
+    return apply_preprocessing(
+        ds,
+        loader.preprocessing,
+        stage="post_validate_pre_tokenize",
+        split=split,
+        seed=shuffle_seed,
+        report=preprocessing_report,
+    )
 
 
 def _load_explicit_train_eval_datasets(
@@ -232,6 +340,8 @@ def _load_explicit_train_eval_datasets(
     shuffle_seed: int,
     console: Console,
     training_config: dict,
+    *,
+    preprocessing_report: list[dict] | None = None,
 ) -> tuple[ray.data.Dataset, ray.data.Dataset | None]:
     """Load train and optional eval datasets from explicit source configuration."""
     train_ds = _shuffle_raw_dataset(
@@ -242,6 +352,9 @@ def _load_explicit_train_eval_datasets(
                 subset=loader.subset,
                 split=loader.split,
             ),
+            split="train",
+            shuffle_seed=shuffle_seed,
+            preprocessing_report=preprocessing_report,
         ),
         shuffle_seed,
         training_config,
@@ -265,6 +378,9 @@ def _load_explicit_train_eval_datasets(
                 else loader.subset,
                 split=loader.val_split or "train",
             ),
+            split="eval",
+            shuffle_seed=shuffle_seed,
+            preprocessing_report=preprocessing_report,
         )
         eval_count = eval_ds.count()
         if eval_count == 0:
@@ -301,6 +417,7 @@ def _tokenize_datasets(
         drop_overlength = training_config.get("drop_overlength", False)
         assistant_only_loss = training_config.get("assistant_only_loss", False)
         completion_only_loss = training_config.get("completion_only_loss", False)
+        loss_weighting = training_config.get("loss_weighting")
 
         console.print(
             "[dim]Tokenizing SFT "
@@ -314,6 +431,8 @@ def _tokenize_datasets(
             packing,
             assistant_only_loss=assistant_only_loss,
             completion_only_loss=completion_only_loss,
+            loss_weighting=loss_weighting,
+            diagnostics_label="train",
             drop_overlength=drop_overlength,
         )
         if eval_ds is not None:
@@ -324,6 +443,8 @@ def _tokenize_datasets(
                 packing=packing,
                 assistant_only_loss=assistant_only_loss,
                 completion_only_loss=completion_only_loss,
+                loss_weighting=loss_weighting,
+                diagnostics_label="eval",
                 drop_overlength=drop_overlength,
             )
         return train_ds, eval_ds
@@ -421,12 +542,18 @@ def _build_tokenization_cache_key(
         "shuffle_seed": shuffle_seed,
     }
 
+    if loader.preprocessing:
+        key["preprocessing"] = preprocessing_fingerprint_data(loader.preprocessing)
+
     if dataset_type == "sft":
         key["max_length"] = training_config.get("max_length", 2048)
         key["packing"] = training_config.get("packing", False)
         key["drop_overlength"] = training_config.get("drop_overlength", False)
         key["assistant_only_loss"] = training_config.get("assistant_only_loss", False)
         key["completion_only_loss"] = training_config.get("completion_only_loss", False)
+        key["loss_weighting"] = loss_weighting_fingerprint_data(
+            training_config.get("loss_weighting")
+        )
         key["shuffle_dataset"] = training_config.get("shuffle_dataset", True)
         key["chat_template"] = training_config.get("chat_template")
         key["chat_template_path"] = training_config.get("chat_template_path")

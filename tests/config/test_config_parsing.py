@@ -402,3 +402,99 @@ class TestFocusedValidation:
         materialized = materialize_job_config(parsed)
         assert materialized.peft_config is not None
         assert materialized.peft_config.value.r == 32
+
+
+class TestExtensibleDataFeatures:
+    def test_preprocessing_and_loss_weighting_paths_are_materialized(self, tmp_path):
+        recipe = tmp_path / "recipe.py"
+        recipe.write_text(
+            "def preprocess(row): return row\n"
+            "def fit(dataset): return {}\n"
+            "def spans(text): return [(0, len(text))]\n"
+        )
+        config = {
+            "project_name": "extensible_data",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": {
+                **BASE_SFT_DATASET,
+                "preprocessing_report_path": "reports/preprocessing.json",
+                "preprocessing": [
+                    {
+                        "op": "map",
+                        "callable": "recipe.py:preprocess",
+                        "fit_callable": "recipe.py:fit",
+                        "fingerprint": {"taxonomy_sha256": "abc123"},
+                    }
+                ],
+            },
+            "training_config": {
+                "loss_weighting": {
+                    "default_weight": 0.2,
+                    "rules": [
+                        {
+                            "name": "custom",
+                            "selector": {
+                                "type": "callable",
+                                "callable": "recipe.py:spans",
+                            },
+                            "weight": 1.0,
+                        }
+                    ],
+                }
+            },
+        }
+
+        materialized = materialize_job_config(
+            parse_job_config(write_config(config, tmp_path))
+        )
+
+        assert materialized.dataset.preprocessing[0]["callable"] == (
+            f"{recipe}:preprocess"
+        )
+        assert materialized.dataset.preprocessing[0]["fit_callable"] == (
+            f"{recipe}:fit"
+        )
+        assert materialized.dataset.preprocessing[0]["fingerprint"] == {
+            "taxonomy_sha256": "abc123"
+        }
+        assert materialized.dataset.preprocessing_report_path == str(
+            tmp_path / "reports/preprocessing.json"
+        )
+        selector = materialized.training_config.value["loss_weighting"]["rules"][0][
+            "selector"
+        ]
+        assert selector["callable"] == f"{recipe}:spans"
+
+    def test_loss_weighting_rejects_unsupported_training_type(self, tmp_path):
+        config = {
+            "project_name": "weighted_dpo",
+            "model_name": "LFM2-1.2B",
+            "training_type": "dpo",
+            "dataset": {"path": "data.jsonl", "type": "dpo", "test_size": None},
+            "training_config": {
+                "loss_weighting": {"default_weight": 1.0},
+            },
+        }
+
+        with pytest.raises(ValueError, match="supported only"):
+            materialize_job_config(parse_job_config(write_config(config, tmp_path)))
+
+    def test_negative_loss_weight_is_rejected(self):
+        with pytest.raises(ValueError, match="greater than or equal to 0"):
+            TrainingConfig.model_validate(
+                {
+                    "loss_weighting": {
+                        "rules": [
+                            {
+                                "name": "bad",
+                                "selector": {
+                                    "type": "regex",
+                                    "pattern": ".+",
+                                },
+                                "weight": -1,
+                            }
+                        ]
+                    }
+                }
+            )

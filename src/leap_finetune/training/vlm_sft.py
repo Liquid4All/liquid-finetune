@@ -4,43 +4,44 @@ import math
 import torch
 from transformers import Trainer, TrainingArguments
 
-from leap_finetune.data_loading.tokenize_data import create_vlm_collate_fn
-from leap_finetune.data_loading.vlm_batching import add_vlm_tile_counts
-from leap_finetune.training.default_configs.vlm_sft_configs import (
-    DEFAULT_LR_MULTIPLIERS,
-    VLM_SFT_EXCLUDED_KEYS,
-)
-from leap_finetune.training.utils.worker_setup import (
-    resolve_train_eval_datasets,
-    init_tracking_from_config,
-)
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
 from leap_finetune.checkpointing.model_loading import load_vlm_model
+from leap_finetune.data_loading.tokenize_data import create_vlm_collate_fn
+from leap_finetune.data_loading.vlm_batching import add_vlm_tile_counts
 from leap_finetune.evaluation import (
     create_vlm_benchmarks_from_config,
     make_eval_callback,
 )
-from leap_finetune.training.utils.logging import (
-    finish_tracker,
-    get_wandb_run_id,
-    is_rank_zero,
+from leap_finetune.training.default_configs.vlm_sft_configs import (
+    DEFAULT_LR_MULTIPLIERS,
+    VLM_SFT_EXCLUDED_KEYS,
 )
 from leap_finetune.training.peft.peft import (
     apply_peft_to_model,
     load_peft_adapter,
     merge_and_save_peft_model,
 )
-from leap_finetune.training.utils.trainer_mixins import (
-    RayDataLoaderMixin,
+from leap_finetune.training.utils.config_filter import filter_runtime_config_kwargs
+from leap_finetune.training.utils.logging import (
+    finish_tracker,
+    get_wandb_run_id,
+    is_rank_zero,
 )
 from leap_finetune.training.utils.trainer_lifecycle import (
     run_training_safely,
 )
-from leap_finetune.training.utils.config_filter import filter_runtime_config_kwargs
+from leap_finetune.training.utils.trainer_mixins import (
+    RayDataLoaderMixin,
+    TokenWeightedLossMixin,
+)
 from leap_finetune.training.utils.vlm_optimizer import (
     build_vlm_param_groups,
     freeze_vlm_modules,
     log_per_group_lrs,
+)
+from leap_finetune.training.utils.worker_setup import (
+    init_tracking_from_config,
+    resolve_train_eval_datasets,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ logger = logging.getLogger(__name__)
 # === VLM Trainer with per-component learning rates ===
 
 
-class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
+class LFMVLMTrainer(RayDataLoaderMixin, TokenWeightedLossMixin, Trainer):
     """VLM Trainer with per-component LR multipliers and Ray data integration.
 
     Vision encoder trains at a lower LR to preserve pretrained features,
@@ -136,6 +137,9 @@ def vlm_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
         config_cls=TrainingArguments,
     )
 
+    if train_config.get("loss_weighting"):
+        train_config_filtered["average_tokens_across_devices"] = True
+
     # Configure experiment tracking
     tracker = init_tracking_from_config(
         job_name,
@@ -195,11 +199,14 @@ def vlm_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
     if freeze_vision_encoder:
         freeze_vlm_modules(model, ["model.vision_tower"])
 
-    collate_fn = create_vlm_collate_fn(processor)
+    collate_fn = create_vlm_collate_fn(
+        processor, loss_weighting=train_config.get("loss_weighting")
+    )
 
     # Initialize trainer with per-component LR multipliers
     # processing_class ensures processor + tokenizer are saved in checkpoints
     trainer = LFMVLMTrainer(
+        token_weighting=train_config.get("loss_weighting"),
         lr_multipliers=lr_multipliers,
         group_by_image_tiles=group_by_image_tiles,
         model=model,
