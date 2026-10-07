@@ -55,7 +55,7 @@ ray_slurm_export_dist_env() {
     fi
   fi
 
-  local detected_iface="${LEAP_SOCKET_IFNAME:-}"
+  local detected_iface="${LIQUID_SOCKET_IFNAME:-}"
   if [[ -z "${detected_iface}" ]]; then
     detected_iface="$(_ray_slurm_detect_iface_for_ip "${probe_ip}" || true)"
   fi

@@ -8,8 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from peft import LoraConfig, get_peft_model
 
-from leap_finetune.config.job_config import JobConfig
-from leap_finetune.quantization.qat import (
+from liquid_finetune.config.job_config import JobConfig
+from liquid_finetune.quantization.qat import (
     PROFILES,
     finalize_qat_after_peft,
     find_qat_config,
@@ -20,7 +20,7 @@ from leap_finetune.quantization.qat import (
     set_qat_enabled,
     write_qat_metadata,
 )
-from leap_finetune.quantization.qat.ops import (
+from liquid_finetune.quantization.qat.ops import (
     affine_groupwise_ste,
     fp8_e4m3_per_tensor_ste,
     fp8_e4m3_per_token_ste,
@@ -336,7 +336,7 @@ def test_moe_targets_packed_experts_but_not_router(profile):
 
 
 def test_expert_parallel_compute_uses_fake_quantized_weights(monkeypatch):
-    from leap_finetune.training.moe_utils import ep_runtime
+    from liquid_finetune.training.moe_utils import ep_runtime
 
     experts = _ToyExperts()
     prepare_model_for_qat(experts, {"qat": {"type": "gguf_q4_0"}})
@@ -400,7 +400,7 @@ def test_peft_style_wrapper_quantizes_input_once_for_base_and_adapter():
     expected = q8_0(value)
     model(value)
     torch.testing.assert_close(model.proj.adapter_input, expected)
-    assert model.proj.base_layer._leap_qat_quantize_activation is False
+    assert model.proj.base_layer._liquid_qat_quantize_activation is False
 
 
 def test_real_peft_lora_shares_quantized_activation_and_freezes_base_weight():
@@ -443,7 +443,7 @@ def test_real_peft_lora_shares_quantized_activation_and_freezes_base_weight():
     torch.testing.assert_close(observed["base"], expected)
     # PEFT casts the shared input to the LoRA weight dtype before lora_A.
     torch.testing.assert_close(observed["adapter"], expected.float())
-    assert layer.base_layer._leap_qat_quantize_activation is False
+    assert layer.base_layer._liquid_qat_quantize_activation is False
     assert layer.base_layer.weight.dtype == torch.bfloat16
     assert not layer.base_layer.weight.requires_grad
     assert layer.lora_A["default"].weight.requires_grad
@@ -537,7 +537,7 @@ def test_qat_grpo_rejects_vllm_rollouts():
 def test_grpo_reference_is_prepared_at_creation_before_wrapping(monkeypatch):
     import trl.trainer.grpo_trainer as grpo_module
 
-    from leap_finetune.quantization.qat.grpo import QATGRPOReferenceMixin
+    from liquid_finetune.quantization.qat.grpo import QATGRPOReferenceMixin
 
     events = []
 
@@ -559,11 +559,11 @@ def test_grpo_reference_is_prepared_at_creation_before_wrapping(monkeypatch):
 
     trainer = FakeQATGRPOTrainer(qat_config={"type": "gguf_q8_0"})
     assert events == ["created", "wrapped"]
-    assert trainer.ref_model.proj._leap_qat_profile == "gguf_q8_0"
+    assert trainer.ref_model.proj._liquid_qat_profile == "gguf_q8_0"
 
 
 def test_quality_matrix_expands_baseline_and_qat_profiles(tmp_path):
-    from leap_finetune.quantization.qat.matrix import (
+    from liquid_finetune.quantization.qat.matrix import (
         expand_quality_manifest,
         write_expanded_configs,
     )
@@ -599,7 +599,7 @@ def test_quality_matrix_expands_baseline_and_qat_profiles(tmp_path):
 
 
 def test_quality_report_keeps_pending_cells_and_computes_deltas(tmp_path):
-    from leap_finetune.quantization.qat.report import write_quality_report
+    from liquid_finetune.quantization.qat.report import write_quality_report
 
     rows = [
         {
@@ -706,7 +706,7 @@ def test_grouped_profiles_report_incompatible_weights_instead_of_padding():
     assert report.linears == ["compatible_proj"]
     assert report.incompatible == ["proj.weight"]
     assert "lm_head" in report.excluded
-    assert not hasattr(model.proj, "_leap_qat_profile")
+    assert not hasattr(model.proj, "_liquid_qat_profile")
 
 
 def test_fp8_profile_accepts_non_grouped_weight_widths():
@@ -733,7 +733,7 @@ def test_vllm_fp8_target_selects_math_and_is_persisted(tmp_path):
     }
     prepare_model_for_qat(model, {"qat": requested})
     assert find_qat_config(model) == requested
-    assert model.proj._leap_qat_target == "rocm_mi300"
+    assert model.proj._liquid_qat_target == "rocm_mi300"
     write_qat_metadata(tmp_path, model)
     assert load_qat_metadata(tmp_path) == requested
 
@@ -789,7 +789,7 @@ def test_fp8_per_tensor_activation_uses_one_scale_for_a_3d_tensor():
 
 
 def test_manual_sharded_root_metadata_writes_qat_sidecar(tmp_path):
-    from leap_finetune.checkpointing.manual_sharded import _save_root_metadata
+    from liquid_finetune.checkpointing.manual_sharded import _save_root_metadata
 
     config = {"type": "noise_q8", "quantize_reference": True}
     _save_root_metadata(

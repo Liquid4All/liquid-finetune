@@ -10,7 +10,7 @@ from pathlib import Path
 
 from datasets import Dataset, load_dataset
 
-from leap_finetune.data_loading.validate_dataset_format import get_row_filter
+from liquid_finetune.data_loading.validate_dataset_format import get_row_filter
 
 DATASET = "mlabonne/orpo-dpo-mix-40k"
 SUBSET = "default"
@@ -72,7 +72,7 @@ def main() -> None:
         "dataset": DATASET,
         "subset": SUBSET,
         "revision": REVISION,
-        "selection": "first 11000 rows passing leap's LFM2.5 DPO filter",
+        "selection": "first 11000 rows passing liquid's LFM2.5 DPO filter",
         **records,
     }
     (args.output_dir / "subset_manifest.json").write_text(

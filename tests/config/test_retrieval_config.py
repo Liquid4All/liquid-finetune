@@ -1,13 +1,13 @@
 import pytest
 import yaml
 
-from leap_finetune.config.parser import materialize_job_config, parse_job_config
+from liquid_finetune.config.parser import materialize_job_config, parse_job_config
 from sentence_transformers import (
     MultiVectorEncoderTrainingArguments,
     SentenceTransformerTrainingArguments,
 )
 
-from leap_finetune.training.retrieval_utils import build_retrieval_training_args
+from liquid_finetune.training.retrieval_utils import build_retrieval_training_args
 
 pytestmark = pytest.mark.configs
 

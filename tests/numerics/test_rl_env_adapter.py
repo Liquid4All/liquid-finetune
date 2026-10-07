@@ -3,7 +3,7 @@ from unittest.mock import Mock, call
 
 import pytest
 
-from leap_finetune.rl.environments.adapter import build_openenv_rollout_func
+from liquid_finetune.rl.environments.adapter import build_openenv_rollout_func
 
 
 class _Processor:

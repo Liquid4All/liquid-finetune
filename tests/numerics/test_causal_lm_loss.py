@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 
-import leap_finetune.training.utils.causal_lm_loss as causal_lm_loss_module
-from leap_finetune.training.utils.causal_lm_loss import (
+import liquid_finetune.training.utils.causal_lm_loss as causal_lm_loss_module
+from liquid_finetune.training.utils.causal_lm_loss import (
     install_memory_efficient_causal_lm_loss,
 )
 

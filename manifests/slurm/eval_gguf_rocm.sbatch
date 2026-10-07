@@ -17,8 +17,8 @@ if [ -n "${ROCR_VISIBLE_DEVICES:-}" ]; then
 fi
 
 : "${EVAL_CONFIG:?Set EVAL_CONFIG to a llama_cpp standalone eval YAML}"
-REPO_ROOT="${LEAP_FINETUNE_ROOT:-$SLURM_SUBMIT_DIR}"
+REPO_ROOT="${LIQUID_FINETUNE_ROOT:-$SLURM_SUBMIT_DIR}"
 
 mkdir -p logs
 cd "$REPO_ROOT"
-"$REPO_ROOT/.venv/bin/leap-finetune" eval "$EVAL_CONFIG"
+"$REPO_ROOT/.venv/bin/liquid-finetune" eval "$EVAL_CONFIG"

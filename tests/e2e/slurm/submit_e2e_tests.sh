@@ -149,8 +149,8 @@ if [[ ! -f "\${VENV_ACTIVATE}" ]]; then
 fi
 source "\${VENV_ACTIVATE}"
 
-export LEAP_E2E_MODE=${mode}
-export LEAP_LAUNCHER=${mode}
+export LIQUID_E2E_MODE=${mode}
+export LIQUID_LAUNCHER=${mode}
 export E2E_TMP_ROOT="${TMP_ROOT}"
 export E2E_JOB_ROOT="${TMP_ROOT}/lft-e2e-\${SLURM_JOB_ID:-manual}-${mode}"
 if (( \${#E2E_JOB_ROOT} > 35 )); then

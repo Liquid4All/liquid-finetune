@@ -4,7 +4,7 @@ from datasets import Dataset
 
 class TestKTOFormat:
     def test_missing_columns_rejected(self):
-        from leap_finetune.data_loading.validate_dataset_format import (
+        from liquid_finetune.data_loading.validate_dataset_format import (
             validate_kto_format,
         )
 
@@ -13,7 +13,7 @@ class TestKTOFormat:
             validate_kto_format(ds)
 
     def test_empty_completion_rejected(self):
-        from leap_finetune.data_loading.validate_dataset_format import (
+        from liquid_finetune.data_loading.validate_dataset_format import (
             validate_kto_format,
         )
 
@@ -22,7 +22,7 @@ class TestKTOFormat:
             validate_kto_format(ds)
 
     def test_valid_rows_pass(self):
-        from leap_finetune.data_loading.validate_dataset_format import (
+        from liquid_finetune.data_loading.validate_dataset_format import (
             validate_kto_format,
         )
 
@@ -43,7 +43,7 @@ class TestKTOFormat:
         validate_kto_format(ds)
 
     def test_row_filter_accepts_valid_and_rejects_invalid(self):
-        from leap_finetune.data_loading.validate_dataset_format import get_row_filter
+        from liquid_finetune.data_loading.validate_dataset_format import get_row_filter
 
         f = get_row_filter("kto")
         valid = {
@@ -58,7 +58,7 @@ class TestKTOFormat:
         assert f({"prompt": "Hi", "completion": "Hello", "label": False}) is True
 
     def test_row_filter_rejects_foreign_tool_markers(self):
-        from leap_finetune.data_loading.validate_dataset_format import get_row_filter
+        from liquid_finetune.data_loading.validate_dataset_format import get_row_filter
 
         f = get_row_filter("kto")
         assert (
@@ -73,7 +73,7 @@ class TestKTOFormat:
         )
 
     def test_invalid_message_shape_rejected(self):
-        from leap_finetune.data_loading.validate_dataset_format import (
+        from liquid_finetune.data_loading.validate_dataset_format import (
             validate_kto_format,
         )
 
@@ -94,7 +94,7 @@ class TestKTODataLoader:
     def test_preserves_order_and_drops_incomplete_batches(self):
         from types import SimpleNamespace
 
-        from leap_finetune.training.kto import LFMKTOTrainer
+        from liquid_finetune.training.kto import LFMKTOTrainer
 
         trainer = LFMKTOTrainer.__new__(LFMKTOTrainer)
         trainer.train_dataset = list(range(5))

@@ -8,9 +8,9 @@
 # the same GPU memory.
 #
 # Launch:
-#   uv run leap-finetune job_configs/grpo_server_mode_example.yaml
+#   uv run liquid-finetune job_configs/grpo_server_mode_example.yaml
 #
-# The leap-finetune driver will:
+# The liquid-finetune driver will:
 # 1. Split GPUs: GPU 0 → vLLM, remaining → training.
 # 2. `trl vllm-serve --model LFM2-1.2B --host 0.0.0.0 --port 8000 ...`
 # 3. Wait for /health, then spawn Ray Train workers.

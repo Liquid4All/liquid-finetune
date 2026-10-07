@@ -5,19 +5,19 @@ from datasets import Dataset
 import pytest
 import torch
 from PIL import Image
-from leap_finetune.data_loading.length_grouping import get_tile_count_grouped_sampler
-from leap_finetune.data_loading.vlm_batching import (
+from liquid_finetune.data_loading.length_grouping import get_tile_count_grouped_sampler
+from liquid_finetune.data_loading.vlm_batching import (
     add_vlm_tile_counts,
     estimate_vlm_tile_count,
 )
 
-from leap_finetune.data_loading import image_loader
-from leap_finetune.data_loading.tokenize_data import create_vlm_collate_fn
+from liquid_finetune.data_loading import image_loader
+from liquid_finetune.data_loading.tokenize_data import create_vlm_collate_fn
 
 
 @pytest.fixture(autouse=True)
 def clean_image_cache(monkeypatch):
-    monkeypatch.delenv("LEAP_IMAGE_CACHE_MAX_BYTES", raising=False)
+    monkeypatch.delenv("LIQUID_IMAGE_CACHE_MAX_BYTES", raising=False)
     image_loader.clear_image_cache()
     yield
     image_loader.clear_image_cache()
@@ -49,7 +49,7 @@ def test_image_cache_returns_closeable_copies(tmp_path, monkeypatch):
 
 
 def test_image_cache_evicts_oldest_entries_by_decoded_bytes(tmp_path, monkeypatch):
-    monkeypatch.setenv("LEAP_IMAGE_CACHE_MAX_BYTES", "600")
+    monkeypatch.setenv("LIQUID_IMAGE_CACHE_MAX_BYTES", "600")
     paths = [tmp_path / f"image-{index}.png" for index in range(3)]
     for path in paths:
         _write_image(path)
@@ -75,7 +75,7 @@ def test_image_cache_evicts_oldest_entries_by_decoded_bytes(tmp_path, monkeypatc
 
 
 def test_image_cache_does_not_retain_image_larger_than_budget(tmp_path, monkeypatch):
-    monkeypatch.setenv("LEAP_IMAGE_CACHE_MAX_BYTES", "299")
+    monkeypatch.setenv("LIQUID_IMAGE_CACHE_MAX_BYTES", "299")
     image_path = tmp_path / "too-large.png"
     _write_image(image_path)
     original_open = image_loader.Image.open
@@ -109,7 +109,7 @@ def test_image_loadability_does_not_populate_cache(tmp_path):
 def test_zero_image_cache_budget_disables_retention(tmp_path, monkeypatch):
     image_path = tmp_path / "uncached.png"
     _write_image(image_path)
-    monkeypatch.setenv("LEAP_IMAGE_CACHE_MAX_BYTES", "0")
+    monkeypatch.setenv("LIQUID_IMAGE_CACHE_MAX_BYTES", "0")
     original_open = image_loader.Image.open
     open_count = 0
 
@@ -128,7 +128,7 @@ def test_zero_image_cache_budget_disables_retention(tmp_path, monkeypatch):
 
 def test_image_cache_keeps_item_limit(tmp_path):
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setenv("LEAP_IMAGE_CACHE_MAX_BYTES", "1000000")
+    monkeypatch.setenv("LIQUID_IMAGE_CACHE_MAX_BYTES", "1000000")
     try:
         paths = [tmp_path / f"image-{index}.png" for index in range(33)]
         for path in paths:
@@ -165,7 +165,7 @@ class _FakeProcessor:
 
 
 def test_vlm_collator_closes_batch_image_copy(tmp_path, monkeypatch):
-    monkeypatch.setenv("LEAP_IMAGE_CACHE_MAX_BYTES", "0")
+    monkeypatch.setenv("LIQUID_IMAGE_CACHE_MAX_BYTES", "0")
     image_path = tmp_path / "batch.png"
     _write_image(image_path)
     processor = _FakeProcessor()

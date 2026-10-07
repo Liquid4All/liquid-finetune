@@ -34,7 +34,7 @@ slurm:
     - "--partition=gpuworker"
     - "--time=01:00:00"
   setup_commands:
-    - "export UV_PROJECT_ENVIRONMENT=/tmp/leap_rocm_${SLURM_JOB_ID}"
+    - "export UV_PROJECT_ENVIRONMENT=/tmp/liquid_rocm_${SLURM_JOB_ID}"
     - "uv sync --project envs/rocm --frozen --no-default-groups --group rocm-core"
     - "source ${UV_PROJECT_ENVIRONMENT}/bin/activate"
     - "export OUTPUT_DIR=./outputs/${SLURM_JOB_NAME}_${SLURM_JOB_ID}"

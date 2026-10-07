@@ -1,6 +1,6 @@
 # Standalone GGUF evaluation. llama-server is launched and stopped by the
 # evaluator. Use a generation metric; llama.cpp continuation logprob scoring is
-# not yet wired into leap-finetune.
+# not yet wired into liquid-finetune.
 project_name: "qat_gguf_eval"
 checkpoint: "/shared/path/model-Q4_0.gguf"
 modality: "text"

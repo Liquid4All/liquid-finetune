@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 import torch
 
-from leap_finetune.quantization.qat import prepare_model_for_qat, set_qat_enabled
-from leap_finetune.quantization.qat.ops import (
+from liquid_finetune.quantization.qat import prepare_model_for_qat, set_qat_enabled
+from liquid_finetune.quantization.qat.ops import (
     mxfp4,
     mxfp8,
     nvfp4,
@@ -49,17 +49,17 @@ def test_gguf_values_and_ste_gradients_match_liquid_lfm(dtype):
     )
 
     coefficient = torch.randn_like(value)
-    leap_value = value.detach().clone().requires_grad_()
+    liquid_value = value.detach().clone().requires_grad_()
     ref_value = value.detach().clone().requires_grad_()
-    (q4_0_ste(leap_value) * coefficient).sum().backward()
+    (q4_0_ste(liquid_value) * coefficient).sum().backward()
     (reference.fake_quantize_q4_0_ste(ref_value) * coefficient).sum().backward()
-    torch.testing.assert_close(leap_value.grad, ref_value.grad)
+    torch.testing.assert_close(liquid_value.grad, ref_value.grad)
 
-    leap_value = value.detach().clone().requires_grad_()
+    liquid_value = value.detach().clone().requires_grad_()
     ref_value = value.detach().clone().requires_grad_()
-    (q8_0_ste(leap_value) * coefficient).sum().backward()
+    (q8_0_ste(liquid_value) * coefficient).sum().backward()
     (reference.fake_quantize_q8_0_ste(ref_value) * coefficient).sum().backward()
-    torch.testing.assert_close(leap_value.grad, ref_value.grad)
+    torch.testing.assert_close(liquid_value.grad, ref_value.grad)
 
 
 def test_mxfp4_matches_vllm_native_torch_reference():

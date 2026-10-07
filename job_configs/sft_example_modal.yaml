@@ -22,10 +22,10 @@ peft_config:
   use_peft: true
 
 modal:
-  app_name: "leap-finetune"
+  app_name: "liquid-finetune"
   gpu: "H100:4"
   timeout: 86400                         # 24 hours
-  output_volume: "leap-finetune"         # Modal Volume, created automatically
+  output_volume: "liquid-finetune"         # Modal Volume, created automatically
   output_dir: "/outputs"                 # mount point inside the container
   detach: false                          # true = fire-and-forget, false = streams logs
   # secrets:

@@ -8,7 +8,7 @@ pytestmark = pytest.mark.evaluation
 
 
 def test_llama_cpp_eval_backend_config_parses():
-    from leap_finetune.config import EvalRunConfig
+    from liquid_finetune.config import EvalRunConfig
 
     cfg = EvalRunConfig.model_validate(
         {
@@ -29,7 +29,7 @@ def test_llama_cpp_eval_backend_config_parses():
 
 
 def test_build_llama_server_command_is_shell_free():
-    from leap_finetune.evaluation.backend import build_llama_server_command
+    from liquid_finetune.evaluation.backend import build_llama_server_command
 
     command = build_llama_server_command(
         server_binary="/opt/llama-server",
@@ -56,7 +56,7 @@ def test_external_llama_cpp_backend_does_not_spawn(monkeypatch):
     popen = MagicMock()
     monkeypatch.setattr("subprocess.Popen", popen)
 
-    from leap_finetune.evaluation.backend import LlamaCppServerBackend
+    from liquid_finetune.evaluation.backend import LlamaCppServerBackend
 
     backend = LlamaCppServerBackend(
         "/models/not-local.gguf",
@@ -73,7 +73,7 @@ def test_external_llama_cpp_backend_does_not_spawn(monkeypatch):
 
 
 def test_runner_constructs_llama_cpp_backend_without_model_resolution(monkeypatch):
-    from leap_finetune.evaluation import runner
+    from liquid_finetune.evaluation import runner
 
     calls = {}
 
@@ -83,7 +83,7 @@ def test_runner_constructs_llama_cpp_backend_without_model_resolution(monkeypatc
             calls["kwargs"] = kwargs
 
     monkeypatch.setattr(
-        "leap_finetune.evaluation.backend.LlamaCppServerBackend", FakeBackend
+        "liquid_finetune.evaluation.backend.LlamaCppServerBackend", FakeBackend
     )
     runner.create_llama_cpp_backend(
         "/models/model.gguf",
@@ -98,7 +98,7 @@ def test_runner_constructs_llama_cpp_backend_without_model_resolution(monkeypatc
 def test_vllm_eval_preserves_quantization_config(monkeypatch):
     from transformers import AutoTokenizer
 
-    from leap_finetune.evaluation import runner
+    from liquid_finetune.evaluation import runner
 
     calls = {}
 
@@ -113,7 +113,7 @@ def test_vllm_eval_preserves_quantization_config(monkeypatch):
 
     monkeypatch.setattr(AutoTokenizer, "from_pretrained", fake_from_pretrained)
     monkeypatch.setattr(
-        "leap_finetune.evaluation.backend.VLLMInProcessBackend",
+        "liquid_finetune.evaluation.backend.VLLMInProcessBackend",
         FakeVLLMBackend,
     )
 
@@ -128,7 +128,7 @@ def test_vllm_eval_preserves_quantization_config(monkeypatch):
 
 
 def test_llm_benchmark_factory_preserves_configured_generation_metric():
-    from leap_finetune.evaluation.llm_config import create_llm_benchmarks_from_config
+    from liquid_finetune.evaluation.llm_config import create_llm_benchmarks_from_config
 
     benchmarks = create_llm_benchmarks_from_config(
         {

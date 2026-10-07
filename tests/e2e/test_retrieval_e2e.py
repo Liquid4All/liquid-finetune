@@ -68,7 +68,7 @@ def test_single_gpu_retrieval_training_improves(kind, e2e_output_dir, tmp_path):
 def test_multi_gpu_retrieval_training_improves(
     kind, e2e_output_dir, monkeypatch, tmp_path
 ):
-    monkeypatch.setenv("LEAP_NUM_WORKERS", "2")
+    monkeypatch.setenv("LIQUID_NUM_WORKERS", "2")
     config_path = _local_retrieval_config(kind, tmp_path)
     result = run_e2e_training(str(config_path), e2e_output_dir)
     _assert_retrieval_improved(result)

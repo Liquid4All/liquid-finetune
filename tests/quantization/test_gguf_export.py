@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from leap_finetune.quantization import gguf_export
+from liquid_finetune.quantization import gguf_export
 
 
 def test_quantize_gguf_can_preserve_token_embeddings(monkeypatch, tmp_path):

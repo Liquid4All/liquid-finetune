@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 
-from leap_finetune.rl.rewards import Recipe
+from liquid_finetune.rl.rewards import Recipe
 
 _HIGHLIGHT_PATTERN = re.compile(r"\*[^*\n]+\*")
 _WORD_PATTERN = re.compile(r"\b[\w'-]+\b")
