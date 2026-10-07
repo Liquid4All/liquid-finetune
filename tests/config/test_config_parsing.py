@@ -402,3 +402,25 @@ class TestFocusedValidation:
         materialized = materialize_job_config(parsed)
         assert materialized.peft_config is not None
         assert materialized.peft_config.value.r == 32
+
+    @pytest.mark.parametrize(
+        "peft_config",
+        [
+            {"use_peft": True, "r": 64, "lora_alpha": 128},
+            {"r": 64, "lora_alpha": 128},
+        ],
+    )
+    def test_peft_overrides_without_extends(self, tmp_path, peft_config):
+        config = {
+            "project_name": "peft",
+            "model_name": "LFM2-1.2B",
+            "training_type": "sft",
+            "dataset": BASE_SFT_DATASET,
+            "training_config": {"extends": "DEFAULT_SFT"},
+            "peft_config": peft_config,
+        }
+        parsed = parse_job_config(write_config(config, tmp_path))
+        materialized = materialize_job_config(parsed)
+        assert materialized.peft_config is not None
+        assert materialized.peft_config.value.r == 64
+        assert materialized.peft_config.value.lora_alpha == 128

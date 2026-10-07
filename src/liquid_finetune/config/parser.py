@@ -354,12 +354,9 @@ def _build_peft_defaults(peft_dict: dict[str, Any] | None):
     peft_dict.pop("use_peft", None)
 
     if not base_peft_name:
-        peft_config = (
-            _ResolvedConfigValue(PEFT_DEFAULTS["DEFAULT_LORA"])
-            if use_peft is True
-            else None
-        )
-        return peft_config, use_peft
+        if use_peft is not True and not peft_dict:
+            return None, use_peft
+        base_peft_name = "DEFAULT_LORA"
 
     if base_peft_name not in PEFT_DEFAULTS:
         available = list(PEFT_DEFAULTS.keys())
