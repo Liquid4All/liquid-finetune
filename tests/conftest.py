@@ -199,7 +199,10 @@ def run_local_e2e_training(
     os.environ["OUTPUT_DIR"] = str(output_dir)
     os.environ["LIQUID_LAUNCHER"] = "local"
     try:
-        from liquid_finetune.config.parser import materialize_job_config, parse_job_config
+        from liquid_finetune.config.parser import (
+            materialize_job_config,
+            parse_job_config,
+        )
         from liquid_finetune.distribution.local_trainer import (
             local_trainer,
             should_use_local,

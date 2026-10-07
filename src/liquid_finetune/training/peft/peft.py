@@ -6,7 +6,10 @@ from datetime import datetime
 from peft import LoraConfig, PeftModel, get_peft_model
 from transformers import AutoTokenizer, PreTrainedModel, ProcessorMixin
 
-from liquid_finetune.quantization.qat.metadata import find_qat_config, write_qat_metadata
+from liquid_finetune.quantization.qat.metadata import (
+    find_qat_config,
+    write_qat_metadata,
+)
 
 logger = logging.getLogger(__name__)
 

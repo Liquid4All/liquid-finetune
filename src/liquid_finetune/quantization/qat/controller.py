@@ -12,7 +12,10 @@ import torch.nn.functional as F
 
 from liquid_finetune.quantization.qat import ops
 from liquid_finetune.quantization.qat.experts import prepare_qat_experts
-from liquid_finetune.quantization.qat.metadata import find_qat_config, validate_qat_resume
+from liquid_finetune.quantization.qat.metadata import (
+    find_qat_config,
+    validate_qat_resume,
+)
 from liquid_finetune.quantization.qat.profiles import QATProfile, get_profile
 
 logger = logging.getLogger(__name__)

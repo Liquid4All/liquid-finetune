@@ -24,7 +24,7 @@
 <a href="#contributing">Contributing</a>
 </p>
 
-LIQUID-Finetune is a minimal fine-tuning repo for LFM2. It handles dataset
+Liquid Finetune is a minimal fine-tuning repo for LFM2. It handles dataset
 formatting, validation, distributed orchestration, checkpointing, and export
 for local GPU nodes, SLURM clusters, Modal, and Kubernetes/KubeRay.
 

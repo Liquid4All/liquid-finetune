@@ -142,7 +142,9 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
     config_dict = None
     config_path_arg = None
     if isinstance(config_path, EvalRunConfig):
-        from liquid_finetune.evaluation.runner import run_eval_config as _run_eval_config
+        from liquid_finetune.evaluation.runner import (
+            run_eval_config as _run_eval_config,
+        )
 
         return _run_eval_config(config_path, output_path=output_path)
     if isinstance(config_path, JobConfig):
@@ -183,7 +185,10 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
 
     # Heavy imports deferred to here to keep remote-submit codepaths fast.
     from liquid_finetune.data_loading.dataset_loader import DatasetLoader
-    from liquid_finetune.distribution.local_trainer import local_trainer, should_use_local
+    from liquid_finetune.distribution.local_trainer import (
+        local_trainer,
+        should_use_local,
+    )
     from liquid_finetune.distribution.ray_trainer import ray_trainer
     from liquid_finetune.training.utils.logging import setup_training_environment
 
