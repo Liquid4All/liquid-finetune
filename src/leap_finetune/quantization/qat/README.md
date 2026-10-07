@@ -21,6 +21,13 @@ on ROCm, with E4M3FNUZ on gfx94x). MXFP4 uses E2M1 values and E8M0 group-32
 scales; MXFP8 uses E4M3 values and E8M0 group-32 scales. NVFP4 uses E2M1
 values, E4M3 group-16 scales, and an FP32 tensor-level scale.
 
+`gguf_q4_0` is numerically aligned with `liquid_lfm`: Q4_0 weight values,
+Q8_0 activation values, and their straight-through gradients match exactly.
+`gguf_q8_0` extends the same native Q8_0 math to weights; `liquid_lfm` does not
+currently provide a Q8_0-weight QAT profile. The MLX and vLLM profiles target
+their deployment runtimes rather than `liquid_lfm` training internals, while
+the noise profiles are deliberately format-agnostic approximations.
+
 NVFP4 QAT models the deterministic deployment-format quantize/dequantize
 operation. Transformer Engine training can additionally use stochastic
 rounding and a random Hadamard transform; those training heuristics are not

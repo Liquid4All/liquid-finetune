@@ -42,7 +42,7 @@ def test_q8_embedding_override_uses_llama_quantize(monkeypatch, tmp_path):
     conversions = []
     quantizations = []
 
-    def fake_convert(model, output, outtype):
+    def fake_convert(model, output, convert_script, converter_python, outtype):
         conversions.append((model, output, outtype))
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(b"f32")
@@ -54,6 +54,17 @@ def test_q8_embedding_override_uses_llama_quantize(monkeypatch, tmp_path):
         return output
 
     monkeypatch.setattr(gguf_export, "convert_hf_to_gguf", fake_convert)
+    monkeypatch.setattr(
+        gguf_export, "resolve_llama_cpp_dir", lambda _: Path("/opt/llama.cpp")
+    )
+    monkeypatch.setattr(
+        gguf_export, "resolve_converter_python", lambda *_: Path("/opt/python")
+    )
+    monkeypatch.setattr(
+        gguf_export,
+        "resolve_convert_script",
+        lambda *_: Path("/opt/llama.cpp/convert_hf_to_gguf.py"),
+    )
     monkeypatch.setattr(
         gguf_export, "resolve_quantize_binary", lambda _: Path("/opt/llama-quantize")
     )

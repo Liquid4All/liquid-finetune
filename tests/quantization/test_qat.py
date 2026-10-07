@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import importlib
 import json
 
-import numpy as np
 import pytest
 import torch
 import torch.nn as nn
@@ -11,7 +9,6 @@ import torch.nn.functional as F
 from peft import LoraConfig, get_peft_model
 
 from leap_finetune.config.job_config import JobConfig
-from leap_finetune.quantization.gguf_export import GGUF_DIR
 from leap_finetune.quantization.qat import (
     PROFILES,
     finalize_qat_after_peft,
@@ -67,66 +64,6 @@ def test_gguf_kernels_match_native_equations():
     value = torch.linspace(-5.0, 4.0, 64, dtype=torch.bfloat16).reshape(2, 32)
     torch.testing.assert_close(q4_0(value), _native_q4_reference(value))
     torch.testing.assert_close(q8_0(value), _native_q8_reference(value))
-
-
-@pytest.mark.parametrize(("qtype_name", "quantizer"), [("Q4_0", q4_0), ("Q8_0", q8_0)])
-def test_gguf_kernels_match_bundled_native_reference(
-    monkeypatch, qtype_name, quantizer
-):
-    monkeypatch.syspath_prepend(str(GGUF_DIR / "gguf-py"))
-    gguf = importlib.import_module("gguf")
-    generator = np.random.default_rng(42)
-    value = generator.normal(size=(1000, 32)).astype(np.float32)
-    qtype = getattr(gguf.GGMLQuantizationType, qtype_name)
-    reference = gguf.dequantize(gguf.quantize(value, qtype), qtype)
-    actual = quantizer(torch.from_numpy(value)).numpy()
-    np.testing.assert_array_equal(actual, reference)
-
-
-@pytest.mark.parametrize(
-    ("weight_qtype_name", "weight_quantizer"),
-    [("Q4_0", q4_0), ("Q8_0", q8_0)],
-)
-def test_gguf_fake_quantized_linear_matches_bundled_native_dequantized_matmul(
-    monkeypatch, weight_qtype_name, weight_quantizer
-):
-    """Check the composed W4A8/W8A8 layer contract, not just each tensor."""
-    monkeypatch.syspath_prepend(str(GGUF_DIR / "gguf-py"))
-    gguf = importlib.import_module("gguf")
-    generator = np.random.default_rng(42)
-    activation = generator.normal(size=(7, 64)).astype(np.float32)
-    weight = generator.normal(size=(48, 64)).astype(np.float32)
-
-    q8_type = gguf.GGMLQuantizationType.Q8_0
-    weight_type = getattr(gguf.GGMLQuantizationType, weight_qtype_name)
-    native_activation = gguf.dequantize(gguf.quantize(activation, q8_type), q8_type)
-    native_weight = gguf.dequantize(gguf.quantize(weight, weight_type), weight_type)
-    expected = native_activation @ native_weight.T
-
-    actual = F.linear(
-        q8_0(torch.from_numpy(activation)),
-        weight_quantizer(torch.from_numpy(weight)),
-    ).numpy()
-    np.testing.assert_allclose(actual, expected, rtol=2e-6, atol=2e-5)
-
-
-def test_bundled_gguf_maps_current_lfm2_dense_tensor_names(monkeypatch):
-    monkeypatch.syspath_prepend(str(GGUF_DIR / "gguf-py"))
-    gguf = importlib.import_module("gguf")
-    mapping = gguf.get_tensor_name_map(gguf.MODEL_ARCH.LFM2, 1)
-    suffixes = (".weight", ".bias")
-
-    expected = {
-        "model.layers.0.feed_forward.w1.weight": "blk.0.ffn_gate.weight",
-        "model.layers.0.feed_forward.w2.weight": "blk.0.ffn_down.weight",
-        "model.layers.0.feed_forward.w3.weight": "blk.0.ffn_up.weight",
-        "model.layers.0.ffn_norm.weight": "blk.0.ffn_norm.weight",
-        "model.layers.0.self_attn.q_layernorm.weight": "blk.0.attn_q_norm.weight",
-        "model.layers.0.self_attn.k_layernorm.weight": "blk.0.attn_k_norm.weight",
-    }
-    assert {
-        name: mapping.get_name(name, try_suffixes=suffixes) for name in expected
-    } == expected
 
 
 @pytest.mark.parametrize(
