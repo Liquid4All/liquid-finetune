@@ -30,14 +30,25 @@ evals:
       metric: "short_answer"
 
 backend:
-  type: "hf" # hf | vllm
+  type: "hf" # hf | vllm | llama_cpp
 ```
+
+Set `backend.quantization: fp8` for online vLLM FP8 or `quark` when an
+artifact requires explicit AMD Quark selection.
 
 Use `leap-finetune eval <eval_config> --output results.json` when you want the
 CLI to write metrics to a JSON file.
 
 Text standalone evals default to `modality: text`. Set `modality: vlm` only
 when running standalone VLM evals outside a VLM training job.
+
+For GGUF evaluation, use `type: llama_cpp` and point `checkpoint` at the GGUF
+file. The evaluator launches `llama-server`, waits for `/health`, runs the
+generation benchmarks over its OpenAI-compatible API, and stops the server.
+Set `backend.mmproj` for VLM GGUF exports. Alternatively set
+`backend.base_url` to connect to a caller-managed server. Continuation-logprob
+benchmarks are not yet supported by this backend, so use generation-based MCQ
+metrics for the GGUF quality matrix.
 
 Python uses the same config:
 

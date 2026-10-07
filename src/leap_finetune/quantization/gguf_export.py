@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 # Types that convert_hf_to_gguf.py can produce directly via --outtype
 DIRECT_QUANTS = {"F16", "BF16", "F32", "Q8_0"}
 
-# Types that require two-step: convert to F16 first, then llama-quantize
+# Types that require two-step: convert to F32 first, then llama-quantize
 # Includes both legacy quants (Q4_0, Q5_0) and K-quants (Q4_K_M, Q5_K_S, etc.)
 QUANTIZE_QUANTS = {
     "Q2_K",
@@ -196,8 +196,12 @@ def quantize_gguf(
     output_gguf: pathlib.Path,
     quant_type: str,
     quantize_bin: pathlib.Path,
+    token_embedding_type: str | None = None,
 ) -> pathlib.Path:
-    cmd = [str(quantize_bin), str(input_gguf), str(output_gguf), quant_type]
+    cmd = [str(quantize_bin)]
+    if token_embedding_type is not None:
+        cmd.extend(["--token-embedding-type", token_embedding_type.lower()])
+    cmd.extend([str(input_gguf), str(output_gguf), quant_type])
     _run_subprocess(cmd, f"Quantizing to {quant_type}")
     logger.info("Created %s (%.2f GB)", output_gguf, output_gguf.stat().st_size / 1e9)
     return output_gguf
@@ -210,6 +214,7 @@ def export_gguf(
     base_model_path: str | None = None,
     llama_cpp_dir: str | None = None,
     llama_cpp_python: str | None = None,
+    token_embedding_type: str | None = None,
 ) -> list[pathlib.Path]:
     model_name = model_path.name
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -248,8 +253,14 @@ def export_gguf(
     convert_hf = resolve_convert_script(llama_dir, "convert_hf_to_gguf.py")
 
     # === Full model export ===
-    direct = [q for q in quant_types if q in DIRECT_QUANTS]
+    direct = [
+        q
+        for q in quant_types
+        if q in DIRECT_QUANTS and not (q == "Q8_0" and token_embedding_type is not None)
+    ]
     needs_quantize = [q for q in quant_types if q in QUANTIZE_QUANTS]
+    if "Q8_0" in quant_types and token_embedding_type is not None:
+        needs_quantize.append("Q8_0")
 
     # Direct quants (F16, BF16, F32, Q8_0) — single step via the convert script
     for quant in direct:
@@ -258,27 +269,33 @@ def export_gguf(
         convert_hf_to_gguf(model_path, out_path, convert_hf, converter_python, outtype)
         results.append(out_path)
 
-    # Quantize quants — need F16 intermediate, then llama-quantize binary
+    # Preserve learned FP32 QAT updates until llama.cpp performs quantization.
     if needs_quantize:
         quantize_bin = resolve_quantize_binary(llama_dir)
 
-        f16_requested = "F16" in direct
-        f16_path = output_dir / f"{model_name}-F16.gguf"
+        f32_requested = "F32" in direct
+        f32_path = output_dir / f"{model_name}-F32.gguf"
 
-        if not f16_path.exists():
+        if not f32_path.exists():
             convert_hf_to_gguf(
-                model_path, f16_path, convert_hf, converter_python, "f16"
+                model_path, f32_path, convert_hf, converter_python, "f32"
             )
 
         for quant in needs_quantize:
             out_path = output_dir / f"{model_name}-{quant}.gguf"
-            quantize_gguf(f16_path, out_path, quant, quantize_bin)
+            quantize_gguf(
+                f32_path,
+                out_path,
+                quant,
+                quantize_bin,
+                token_embedding_type=token_embedding_type,
+            )
             results.append(out_path)
 
-        # Clean up intermediate F16 if it wasn't explicitly requested
-        if not f16_requested and f16_path.exists():
-            f16_path.unlink()
-            logger.info("Cleaned up intermediate F16 file")
+        # Clean up the lossless intermediate unless it was explicitly requested.
+        if not f32_requested and f32_path.exists():
+            f32_path.unlink()
+            logger.info("Cleaned up intermediate F32 file")
 
     # Multimodal checkpoints need a companion mmproj GGUF (the vision/audio
     # encoder), produced once at F16 and paired with any text quant.

@@ -1,0 +1,125 @@
+version: 1
+seed: 42
+profiles:
+  - gguf_q4_0
+  - gguf_q8_0
+  - mlx_q4
+  - mlx_q8
+  - vllm_fp8
+  - vllm_mxfp4
+  - vllm_mxfp8
+  - vllm_nvfp4
+  - noise_q4
+  - noise_q8
+
+# Dataset revisions and selected row IDs must be captured in the result record
+# at launch time. GRPO uses HF generation because QAT+vLLM is intentionally rejected.
+# Every SFT, DPO, and GRPO row starts independently from model_name. No row consumes
+# another trainer's checkpoint or adapter. Each row expands to matched BF16 and QAT
+# arms; PTQ is produced from that row's BF16 checkpoint after training.
+runs:
+  - id: dense_sft
+    config:
+      model_name: LiquidAI/LFM2.5-1.2B-Base
+      training_type: sft
+      dataset:
+        # Produced by quality/dense_sft_smoltalk/materialize_subset.py.
+        train_path: /shared/path/qat-quality/datasets/smoltalk-smol-constraints/train_10000.parquet
+        val_path: /shared/path/qat-quality/datasets/smoltalk-smol-constraints/test_1000.parquet
+        type: sft
+      training_config:
+        num_train_epochs: 1
+        per_device_train_batch_size: 16
+        per_device_eval_batch_size: 16
+        gradient_accumulation_steps: 1
+        learning_rate: 5.0e-5
+        lr_scheduler_type: linear
+        warmup_ratio: 0.1
+        logging_steps: 5
+        logging_first_step: true
+        save_strategy: epoch
+        eval_strategy: epoch
+        data_seed: 42
+        bf16: true
+        max_length: 256
+        deepspeed: false
+        tracker: none
+      peft_config: {use_peft: false}
+  - id: dense_dpo
+    config:
+      model_name: LiquidAI/LFM2.5-1.2B-Instruct
+      training_type: dpo
+      dataset:
+        # Produced by quality/dense_dpo_orpo/materialize_subset.py.
+        train_path: /shared/path/qat-quality/datasets/orpo-dpo-mix-40k/train_10000.parquet
+        val_path: /shared/path/qat-quality/datasets/orpo-dpo-mix-40k/eval_1000.parquet
+        type: dpo
+      training_config: {extends: DEFAULT_DPO, num_train_epochs: 1, eval_strategy: epoch}
+      peft_config: {use_peft: false}
+  - id: dense_grpo
+    config:
+      model_name: LiquidAI/LFM2.5-1.2B-Instruct
+      training_type: grpo
+      dataset: {train_path: /shared/path/qat-quality/datasets/openr1-math/train_10000.parquet, val_path: /shared/path/qat-quality/datasets/openr1-math/eval_1000.parquet, type: grpo}
+      rewards: {recipe: tasks/gsm8k/recipe.py::GSM8KRecipe}
+      # With batch_size=8 and num_generations=8, each optimizer step consumes
+      # one unique prompt. Ten thousand steps are one pass over the fixed pool.
+      training_config: {extends: DEFAULT_GRPO, max_steps: 10000, use_vllm: false, save_strategy: steps, save_steps: 1000, save_total_limit: 2}
+  - id: vision_sft
+    config:
+      model_name: LiquidAI/LFM2.5-VL-450M
+      training_type: vlm_sft
+      dataset: {train_path: /shared/path/qat-quality/datasets/llava-vsft/train_10000.parquet, val_path: /shared/path/qat-quality/datasets/llava-vsft/test_1000.parquet, type: vlm_sft}
+      training_config: {extends: DEFAULT_VLM_SFT, num_train_epochs: 1, eval_strategy: epoch}
+      peft_config: {extends: DEFAULT_VLM_LORA, use_peft: true}
+  - id: vision_dpo
+    config:
+      model_name: LiquidAI/LFM2.5-VL-450M
+      training_type: vlm_dpo
+      dataset: {path: openbmb/RLAIF-V-Dataset, type: vlm_dpo, train_split: "train[:10000]", val_split: "train[10000:11000]"}
+      training_config: {extends: DEFAULT_VLM_DPO, num_train_epochs: 1, eval_strategy: epoch}
+      peft_config: {extends: DEFAULT_VLM_LORA, use_peft: true}
+  - id: vision_grpo
+    config:
+      model_name: LiquidAI/LFM2.5-VL-450M
+      training_type: vlm_grpo
+      dataset: {path: Voxel51/RefCOCO, type: vlm_grpo, train_split: "train[:10000]", val_split: "train[10000:11000]"}
+      rewards: {recipe: tasks/vlm_grounding/recipe.py::VLMGroundingIoURecipe}
+      training_config: {extends: DEFAULT_VLM_GRPO, max_steps: 100, use_vllm: false, beta: 0.01, save_strategy: steps, save_steps: 100}
+      peft_config: {use_peft: false}
+  - id: moe_sft
+    config:
+      model_name: LiquidAI/LFM2-8B-A1B
+      training_type: moe_sft
+      dataset: {path: HuggingFaceTB/smoltalk, type: sft, subset: smol-constraints, train_split: "train[:10000]", val_split: "test[:1000]"}
+      training_config: {extends: MOE_SFT, num_train_epochs: 1, eval_strategy: epoch}
+      peft_config: {extends: MOE_LORA, use_peft: true}
+  - id: moe_dpo
+    config:
+      model_name: LiquidAI/LFM2-8B-A1B
+      training_type: moe_dpo
+      dataset:
+        train_path: /shared/path/qat-quality/datasets/orpo-dpo-mix-40k/train_10000.parquet
+        val_path: /shared/path/qat-quality/datasets/orpo-dpo-mix-40k/eval_1000.parquet
+        type: dpo
+      training_config: {extends: MOE_DPO, num_train_epochs: 1, eval_strategy: epoch}
+      peft_config: {extends: MOE_LORA, use_peft: true}
+
+evaluation:
+  text: {gsm8k: 250, ifeval: 250, balanced_mmlu_mcqa: 500, heldout_loss: true}
+  vision: {mmmu: 334, docvqa: 333, refcoco_grounding: 333}
+  seeds_after_selection: 3
+
+hardware_evaluation:
+  # Expensive NVIDIA floating-point coverage is SFT-only. H100 does not supply
+  # native MXFP8, MXFP4 W4A4, or NVFP4 and must not be reported as native.
+  modal_h100:
+    training_types: [sft, vlm_sft, moe_sft]
+    profiles: [vllm_fp8]
+  modal_b200:
+    training_types: [sft, vlm_sft, moe_sft]
+    profiles: [vllm_fp8, vllm_mxfp8, vllm_mxfp4, vllm_nvfp4]
+  slurm_mi325x:
+    profiles: [vllm_fp8]
+  llama_cpp:
+    profiles: [gguf_q4_0, gguf_q8_0]

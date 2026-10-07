@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Materialize the immutable 10k/1k vision-SFT quality subsets."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+
+from datasets import load_dataset
+
+DATASET = "HuggingFaceH4/llava-instruct-mix-vsft"
+REVISION = "4c04c8302cb25a9c7ee48d2dfda99308d432f87c"
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    args = parser.parse_args()
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    records = {}
+    for split, count in (("train", 10000), ("test", 1000)):
+        dataset = load_dataset(
+            DATASET,
+            revision=REVISION,
+            split=f"{split}[:{count}]",
+            cache_dir=str(args.cache_dir) if args.cache_dir else None,
+        )
+        dataset = dataset.add_column("source_row_id", list(range(len(dataset))))
+        artifact = args.output_dir / f"{split}_{count}.parquet"
+        dataset.to_parquet(artifact)
+        records[split] = {
+            "artifact": str(artifact.resolve()),
+            "rows": len(dataset),
+            "source_row_ids": list(range(len(dataset))),
+            "sha256": _sha256(artifact),
+        }
+
+    manifest = {
+        "dataset": DATASET,
+        "revision": REVISION,
+        "selection": "first rows of each published split",
+        **records,
+    }
+    (args.output_dir / "subset_manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n"
+    )
+
+
+if __name__ == "__main__":
+    main()
