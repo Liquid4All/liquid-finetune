@@ -18,10 +18,10 @@ fi
 
 : "${ROCM_VENV:?Set ROCM_VENV to the environment built by setup_vllm_rocm.sbatch}"
 : "${EVAL_CONFIG:?Set EVAL_CONFIG to a vllm standalone eval YAML}"
-REPO_ROOT="${LEAP_FINETUNE_ROOT:-$SLURM_SUBMIT_DIR}"
+REPO_ROOT="${LIQUID_FINETUNE_ROOT:-$SLURM_SUBMIT_DIR}"
 
 mkdir -p logs
 cd "$REPO_ROOT"
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export TOKENIZERS_PARALLELISM=false
-"$ROCM_VENV/bin/leap-finetune" eval "$EVAL_CONFIG"
+"$ROCM_VENV/bin/liquid-finetune" eval "$EVAL_CONFIG"

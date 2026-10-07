@@ -16,7 +16,7 @@
 # `dataset.image_root` is prepended to relative image paths.
 #
 # Launch:
-#   uv run leap-finetune job_configs/vlm_grpo_grounding_example.yaml
+#   uv run liquid-finetune job_configs/vlm_grpo_grounding_example.yaml
 #   sbatch job_configs/slurms/vlm_grpo_grounding_example.sh
 
 project_name: "vlm_grpo_grounding"

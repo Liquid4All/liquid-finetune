@@ -6,7 +6,7 @@
 # `#### N` answer from the assistant turn.
 #
 # Launch:
-#   uv run leap-finetune job_configs/grpo_example.yaml
+#   uv run liquid-finetune job_configs/grpo_example.yaml
 #   sbatch job_configs/slurms/grpo_example.sh
 
 project_name: "grpo_example"

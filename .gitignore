@@ -16,9 +16,9 @@ wheels/
 .codex/
 .claude/
 
-# Local HF models (ignores everything in src except leap_finetune)
+# Local HF models (ignores everything in src except liquid_finetune)
 src/*
-!src/leap_finetune/
+!src/liquid_finetune/
 .hf/
 .hf-cache/
 

@@ -12,8 +12,8 @@
 
 set -euo pipefail
 
-if [ -n "${LEAP_CUDA_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
-    module load "$LEAP_CUDA_MODULE" 2>/dev/null || true
+if [ -n "${LIQUID_CUDA_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
+    module load "$LIQUID_CUDA_MODULE" 2>/dev/null || true
 fi
 export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 
@@ -30,6 +30,6 @@ export TRITON_CACHE_DIR="${TMPDIR}/triton_cache"
 export TORCH_EXTENSIONS_DIR="${TMPDIR}/torch_extensions"
 mkdir -p "$TMPDIR" "$TRITON_CACHE_DIR" "$TORCH_EXTENSIONS_DIR" logs/eval_standalone_toy outputs/eval_standalone_toy
 
-leap-finetune eval \
+liquid-finetune eval \
     tests/e2e/fixtures/toy_eval_standalone.yaml \
     --output "outputs/eval_standalone_toy/results_${SLURM_JOB_ID:-manual}.json"

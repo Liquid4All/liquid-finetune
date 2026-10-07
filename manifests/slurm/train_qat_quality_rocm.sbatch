@@ -16,10 +16,10 @@ if [ -n "${ROCR_VISIBLE_DEVICES:-}" ]; then
     unset ROCR_VISIBLE_DEVICES
 fi
 
-: "${ROCM_VENV:?Set ROCM_VENV to the ROCm leap-finetune environment}"
+: "${ROCM_VENV:?Set ROCM_VENV to the ROCm liquid-finetune environment}"
 : "${TRAIN_CONFIG:?Set TRAIN_CONFIG to a local training YAML}"
 : "${QUALITY_OUTPUT_DIR:?Set QUALITY_OUTPUT_DIR to a persistent output directory}"
-REPO_ROOT="${LEAP_FINETUNE_ROOT:-$SLURM_SUBMIT_DIR}"
+REPO_ROOT="${LIQUID_FINETUNE_ROOT:-$SLURM_SUBMIT_DIR}"
 
 mkdir -p logs "$QUALITY_OUTPUT_DIR"
 export OUTPUT_DIR="$QUALITY_OUTPUT_DIR"
@@ -29,8 +29,8 @@ export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 export TOKENIZERS_PARALLELISM=false
 export WANDB_MODE=disabled
-export TMPDIR="/tmp/leap-qat-quality-${SLURM_JOB_ID}"
+export TMPDIR="/tmp/liquid-qat-quality-${SLURM_JOB_ID}"
 mkdir -p "$TMPDIR"
 
 cd "$REPO_ROOT"
-"$ROCM_VENV/bin/leap-finetune" run "$TRAIN_CONFIG"
+"$ROCM_VENV/bin/liquid-finetune" run "$TRAIN_CONFIG"

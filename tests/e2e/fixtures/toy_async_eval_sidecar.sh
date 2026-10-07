@@ -14,8 +14,8 @@
 set -euo pipefail
 
 # Optional: load your cluster's CUDA module if `module load` is in use.
-if [ -n "${LEAP_CUDA_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
-    module load "$LEAP_CUDA_MODULE" 2>/dev/null || true
+if [ -n "${LIQUID_CUDA_MODULE:-}" ] && command -v module >/dev/null 2>&1; then
+    module load "$LIQUID_CUDA_MODULE" 2>/dev/null || true
 fi
 export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda}"
 
@@ -32,4 +32,4 @@ export TMPDIR="${HOME}/tmp"
 export TRITON_CACHE_DIR="${HOME}/.triton_cache"
 mkdir -p "$TMPDIR" "$TRITON_CACHE_DIR" logs/async_eval_toy
 
-leap-finetune tests/e2e/fixtures/toy_async_eval_sidecar.yaml
+liquid-finetune tests/e2e/fixtures/toy_async_eval_sidecar.yaml

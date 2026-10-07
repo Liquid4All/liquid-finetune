@@ -8,7 +8,7 @@ import pytest
 import torch
 import yaml
 
-from leap_finetune import LEAP_FINETUNE_DIR
+from liquid_finetune import LIQUID_FINETUNE_DIR
 
 # === Ray temp dir ===
 _RAY_TMPDIR = pathlib.Path(f"/tmp/{os.environ.get('USER', 'default')}/ray")
@@ -17,7 +17,7 @@ os.environ.setdefault("RAY_TMPDIR", str(_RAY_TMPDIR))
 
 # === E2E test output dir ===
 
-_DEFAULT_TEST_RESULTS_DIR = LEAP_FINETUNE_DIR / ".test-results" / "e2e"
+_DEFAULT_TEST_RESULTS_DIR = LIQUID_FINETUNE_DIR / ".test-results" / "e2e"
 
 
 def _e2e_test_results_dir() -> pathlib.Path:
@@ -42,7 +42,7 @@ def pytest_addoption(parser):
 
 def pytest_collection_modifyitems(config, items):
     e2e_items = [item for item in items if _is_e2e_item(item)]
-    e2e_mode = os.environ.get("LEAP_E2E_MODE")
+    e2e_mode = os.environ.get("LIQUID_E2E_MODE")
     if e2e_items and len(e2e_items) > 1:
         if not os.environ.get("SLURM_JOB_ID"):
             raise pytest.UsageError(
@@ -53,7 +53,7 @@ def pytest_collection_modifyitems(config, items):
         if e2e_mode not in {"ray", "local"}:
             raise pytest.UsageError(
                 "Full E2E runs must use the supplied two-job SLURM launcher. "
-                "Set LEAP_E2E_MODE through "
+                "Set LIQUID_E2E_MODE through "
                 "tests/e2e/slurm/submit_e2e_tests.sh."
             )
 
@@ -122,7 +122,7 @@ requires_single_gpu = pytest.mark.skipif(
 
 @pytest.fixture
 def job_configs_dir():
-    return LEAP_FINETUNE_DIR / "job_configs"
+    return LIQUID_FINETUNE_DIR / "job_configs"
 
 
 @pytest.fixture
@@ -195,12 +195,12 @@ def run_local_e2e_training(
 ):
     """Run a short job through the explicit native local single-GPU path."""
     previous_output_dir = os.environ.get("OUTPUT_DIR")
-    previous_launcher = os.environ.get("LEAP_LAUNCHER")
+    previous_launcher = os.environ.get("LIQUID_LAUNCHER")
     os.environ["OUTPUT_DIR"] = str(output_dir)
-    os.environ["LEAP_LAUNCHER"] = "local"
+    os.environ["LIQUID_LAUNCHER"] = "local"
     try:
-        from leap_finetune.config.parser import materialize_job_config, parse_job_config
-        from leap_finetune.distribution.local_trainer import (
+        from liquid_finetune.config.parser import materialize_job_config, parse_job_config
+        from liquid_finetune.distribution.local_trainer import (
             local_trainer,
             should_use_local,
         )
@@ -216,9 +216,9 @@ def run_local_e2e_training(
         else:
             os.environ["OUTPUT_DIR"] = previous_output_dir
         if previous_launcher is None:
-            os.environ.pop("LEAP_LAUNCHER", None)
+            os.environ.pop("LIQUID_LAUNCHER", None)
         else:
-            os.environ["LEAP_LAUNCHER"] = previous_launcher
+            os.environ["LIQUID_LAUNCHER"] = previous_launcher
 
 
 def assert_local_model_saved(output_dir: pathlib.Path):
@@ -230,11 +230,11 @@ def assert_local_model_saved(output_dir: pathlib.Path):
 def run_e2e_training(config_path: str, output_dir: pathlib.Path):
     """Run a normal E2E case through Ray and return its Result."""
     previous_output_dir = os.environ.get("OUTPUT_DIR")
-    previous_launcher = os.environ.get("LEAP_LAUNCHER")
+    previous_launcher = os.environ.get("LIQUID_LAUNCHER")
     os.environ["OUTPUT_DIR"] = str(output_dir)
-    os.environ["LEAP_LAUNCHER"] = "ray"
+    os.environ["LIQUID_LAUNCHER"] = "ray"
     try:
-        from leap_finetune.cli.main import run_config
+        from liquid_finetune.cli.main import run_config
 
         return run_config(config_path)
     finally:
@@ -243,9 +243,9 @@ def run_e2e_training(config_path: str, output_dir: pathlib.Path):
         else:
             os.environ["OUTPUT_DIR"] = previous_output_dir
         if previous_launcher is None:
-            os.environ.pop("LEAP_LAUNCHER", None)
+            os.environ.pop("LIQUID_LAUNCHER", None)
         else:
-            os.environ["LEAP_LAUNCHER"] = previous_launcher
+            os.environ["LIQUID_LAUNCHER"] = previous_launcher
 
 
 def assert_training_result(

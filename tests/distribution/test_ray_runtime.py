@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from leap_finetune.distribution import ray_runtime
+from liquid_finetune.distribution import ray_runtime
 
 
 def _usage(*, free: int, total: int | None = None):
@@ -40,7 +40,7 @@ def test_select_object_spilling_dir_is_under_ray_temp_dir(tmp_path):
 
 
 def test_object_store_size_scales_with_available_memory_and_shm(monkeypatch):
-    monkeypatch.delenv("LEAP_RAY_OBJECT_STORE_MEMORY", raising=False)
+    monkeypatch.delenv("LIQUID_RAY_OBJECT_STORE_MEMORY", raising=False)
     monkeypatch.setattr(
         ray_runtime.psutil,
         "virtual_memory",
@@ -58,7 +58,7 @@ def test_object_store_size_scales_with_available_memory_and_shm(monkeypatch):
 
 
 def test_object_store_size_uses_tmp_when_shm_is_too_small(tmp_path, monkeypatch):
-    monkeypatch.delenv("LEAP_RAY_OBJECT_STORE_MEMORY", raising=False)
+    monkeypatch.delenv("LIQUID_RAY_OBJECT_STORE_MEMORY", raising=False)
     monkeypatch.delenv("RAY_OBJECT_STORE_ALLOW_SLOW_STORAGE", raising=False)
     monkeypatch.setattr(
         ray_runtime.psutil,
@@ -80,7 +80,7 @@ def test_object_store_size_uses_tmp_when_shm_is_too_small(tmp_path, monkeypatch)
 
 
 def test_object_store_size_does_not_use_old_large_fixed_fallback(monkeypatch, tmp_path):
-    monkeypatch.delenv("LEAP_RAY_OBJECT_STORE_MEMORY", raising=False)
+    monkeypatch.delenv("LIQUID_RAY_OBJECT_STORE_MEMORY", raising=False)
     monkeypatch.setattr(
         ray_runtime.psutil,
         "virtual_memory",
@@ -104,14 +104,14 @@ def test_object_store_size_does_not_use_old_large_fixed_fallback(monkeypatch, tm
 
 def test_object_store_memory_can_be_explicitly_overridden(monkeypatch):
     configured = 256 * 1024**2
-    monkeypatch.setenv("LEAP_RAY_OBJECT_STORE_MEMORY", str(configured))
+    monkeypatch.setenv("LIQUID_RAY_OBJECT_STORE_MEMORY", str(configured))
 
     assert ray_runtime.resolve_local_object_store_memory() == configured
 
 
 @pytest.mark.parametrize("value", ["not-a-size", "1"])
 def test_object_store_memory_override_is_validated(monkeypatch, value):
-    monkeypatch.setenv("LEAP_RAY_OBJECT_STORE_MEMORY", value)
+    monkeypatch.setenv("LIQUID_RAY_OBJECT_STORE_MEMORY", value)
 
-    with pytest.raises(ValueError, match="LEAP_RAY_OBJECT_STORE_MEMORY"):
+    with pytest.raises(ValueError, match="LIQUID_RAY_OBJECT_STORE_MEMORY"):
         ray_runtime.resolve_local_object_store_memory()

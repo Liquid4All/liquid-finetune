@@ -22,7 +22,7 @@ def _convert_with_llmcompressor(checkpoint: str, output_dir: str, profile: str) 
         raise SystemExit(
             "Install llmcompressor in a separate conversion environment whose "
             "Transformers version satisfies the package constraints. The "
-            "leap-finetune Transformers 5.3 runtime is intentionally separate."
+            "liquid-finetune Transformers 5.3 runtime is intentionally separate."
         ) from exc
 
     scheme = {

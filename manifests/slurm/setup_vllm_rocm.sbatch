@@ -17,7 +17,7 @@ if [ -n "${ROCR_VISIBLE_DEVICES:-}" ]; then
 fi
 
 : "${ROCM_VENV:?Set ROCM_VENV to a persistent shared path outside /tmp}"
-REPO_ROOT="${LEAP_FINETUNE_ROOT:-$SLURM_SUBMIT_DIR}"
+REPO_ROOT="${LIQUID_FINETUNE_ROOT:-$SLURM_SUBMIT_DIR}"
 VLLM_ROCM_INDEX_URL="${VLLM_ROCM_INDEX_URL:-https://wheels.vllm.ai/rocm/799c3afa5d5b17b676d04e0b58a5628943bb4003/rocm722/}"
 
 mkdir -p "$(dirname "$ROCM_VENV")" logs

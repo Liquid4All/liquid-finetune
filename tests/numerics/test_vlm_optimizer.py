@@ -1,6 +1,6 @@
 import torch
 
-from leap_finetune.training.utils.vlm_optimizer import freeze_vlm_modules
+from liquid_finetune.training.utils.vlm_optimizer import freeze_vlm_modules
 
 
 class _ToyVLM(torch.nn.Module):

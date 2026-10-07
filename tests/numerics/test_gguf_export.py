@@ -2,7 +2,7 @@ import pathlib
 
 import pytest
 
-from leap_finetune.quantization import gguf_export
+from liquid_finetune.quantization import gguf_export
 
 
 def _make_executable(path: pathlib.Path) -> pathlib.Path:
