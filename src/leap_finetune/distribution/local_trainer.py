@@ -13,7 +13,17 @@ from leap_finetune.distribution.distributed_configs import (
 from leap_finetune.training import TRAINING_LOOPS
 
 _LOCAL_TYPES = frozenset(
-    {"sft", "dpo", "vlm_sft", "vlm_dpo", "grpo", "vlm_grpo", "moe_sft", "moe_dpo"}
+    {
+        "sft",
+        "dpo",
+        "vlm_embedding",
+        "vlm_sft",
+        "vlm_dpo",
+        "grpo",
+        "vlm_grpo",
+        "moe_sft",
+        "moe_dpo",
+    }
 )
 
 

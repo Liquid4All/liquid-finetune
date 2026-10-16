@@ -18,6 +18,10 @@ _TRAINING_LOOP_TARGETS = MappingProxyType(
         "kto": ("leap_finetune.training.kto", "kto_run"),
         "embedding": ("leap_finetune.training.embedding", "embedding_run"),
         "colbert": ("leap_finetune.training.colbert", "colbert_run"),
+        "vlm_embedding": (
+            "leap_finetune.training.vlm_embedding",
+            "vlm_embedding_run",
+        ),
         "vlm_sft": ("leap_finetune.training.vlm_sft", "vlm_sft_run"),
         "vlm_dpo": ("leap_finetune.training.vlm_dpo", "vlm_dpo_run"),
         "grpo": ("leap_finetune.training.grpo", "grpo_run"),
@@ -36,6 +40,7 @@ TRAINING_DATASETS_TO_SPLIT = MappingProxyType(
     {
         "embedding": ("train",),
         "colbert": ("train",),
+        "vlm_embedding": ("train",),
         "grpo": (),
         "vlm_grpo": (),
     }
@@ -72,6 +77,7 @@ def __getattr__(name: str):
         "kto_run": "kto",
         "embedding_run": "embedding",
         "colbert_run": "colbert",
+        "vlm_embedding_run": "vlm_embedding",
         "vlm_sft_run": "vlm_sft",
         "vlm_dpo_run": "vlm_dpo",
         "grpo_run": "grpo",
@@ -93,6 +99,7 @@ __all__ = [
     "kto_run",
     "embedding_run",
     "colbert_run",
+    "vlm_embedding_run",
     "vlm_sft_run",
     "vlm_dpo_run",
     "grpo_run",

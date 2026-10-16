@@ -476,6 +476,33 @@ def get_row_filter(
             return True
         return _is_nonempty_text(negative) and negative.strip() != positive.strip()
 
+    def is_valid_vlm_embedding(row: dict) -> bool:
+        from leap_finetune.data_loading.image_loader import is_image_loadable
+
+        def valid_item(value: Any) -> bool:
+            if not isinstance(value, dict):
+                return False
+            if not _is_nonempty_text(value.get("instruction")):
+                return False
+            text = value.get("text")
+            image = value.get("image")
+            has_text = text is not None and _is_nonempty_text(text)
+            has_image = image is not None and isinstance(image, str)
+            return (has_text or has_image) and (
+                not has_image or is_image_loadable(image)
+            )
+
+        query = row.get("query")
+        positive = row.get("positive")
+        negative = row.get("negative")
+        return (
+            valid_item(query)
+            and valid_item(positive)
+            and valid_item(negative)
+            and query != positive
+            and positive != negative
+        )
+
     if dataset_type == "sft":
         return is_valid_sft
     elif dataset_type == "kto":
@@ -484,6 +511,8 @@ def get_row_filter(
         return is_valid_dpo
     elif dataset_type in ("embedding", "colbert"):
         return is_valid_retrieval
+    elif dataset_type == "vlm_embedding":
+        return is_valid_vlm_embedding
     elif dataset_type == "vlm_sft":
         return is_valid_vlm_sft
     elif dataset_type == "vlm_dpo":
@@ -847,6 +876,47 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
             row["negative"] = negative.tolist()
         return row
 
+    def normalize_vlm_embedding(row: dict) -> dict:
+        import json
+        import pathlib
+
+        import numpy as np
+
+        def as_python(value: Any) -> Any:
+            if isinstance(value, np.ndarray):
+                return [as_python(item) for item in value.tolist()]
+            if isinstance(value, list):
+                return [as_python(item) for item in value]
+            if isinstance(value, dict):
+                return {key: as_python(item) for key, item in value.items()}
+            return value
+
+        for role in ("query", "positive", "negative"):
+            value = as_python(row.get(role))
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except (json.JSONDecodeError, TypeError):
+                    value = {"text": value}
+            if not isinstance(value, dict):
+                row[role] = value
+                continue
+            if "instruction" not in value:
+                value["instruction"] = (
+                    "Represent this query for retrieving relevant content."
+                    if role == "query"
+                    else "Represent this content for retrieval."
+                )
+            image = value.get("image")
+            if (
+                image_root
+                and isinstance(image, str)
+                and not pathlib.PurePosixPath(image).is_absolute()
+            ):
+                value["image"] = str(pathlib.PurePosixPath(image_root) / image)
+            row[role] = value
+        return row
+
     if dataset_type == "vlm_sft":
         return normalize_vlm_sft
     elif dataset_type == "vlm_dpo":
@@ -857,6 +927,8 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
         return add_dpo_prompt
     elif dataset_type in ("embedding", "colbert"):
         return normalize_retrieval
+    elif dataset_type == "vlm_embedding":
+        return normalize_vlm_embedding
     elif dataset_type == "grpo":
         return normalize_grpo
     elif dataset_type == "vlm_grpo":
@@ -929,6 +1001,8 @@ def validate_dataset_format(
         return validate_kto_format(dataset)
     elif dataset_type in ("embedding", "colbert"):
         return validate_retrieval_format(dataset)
+    elif dataset_type == "vlm_embedding":
+        return validate_vlm_embedding_format(dataset)
     elif dataset_type == "vlm_sft":
         return validate_vlm_sft_format(dataset)
     elif dataset_type == "vlm_dpo":
@@ -975,6 +1049,29 @@ def validate_retrieval_format(dataset: Dataset) -> Dataset:
         raise ValueError(
             f"Retrieval dataset has {len(invalid)} invalid row(s), including {invalid[:10]}. "
             "Queries/positives must be distinct non-empty strings; the negative must be a distinct non-empty string."
+        )
+    return dataset
+
+
+def validate_vlm_embedding_format(dataset: Dataset) -> Dataset:
+    """Validate multimodal query/positive/negative embedding records."""
+
+    columns = dataset.column_names
+    missing = [
+        column for column in ("query", "positive", "negative") if column not in columns
+    ]
+    if missing:
+        raise ValueError(
+            "VLM embedding dataset is missing required column(s) "
+            f"{missing}. Found: {columns}."
+        )
+    valid = get_row_filter("vlm_embedding")
+    invalid = [index for index, row in enumerate(dataset) if not valid(row)]
+    if invalid:
+        raise ValueError(
+            f"VLM embedding dataset has {len(invalid)} invalid row(s), including "
+            f"{invalid[:10]}. Each role needs an instruction and non-empty text "
+            "or a loadable image; positive and negative must differ."
         )
     return dataset
 

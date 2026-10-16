@@ -22,6 +22,7 @@ class DatasetLoader:
         "kto",
         "embedding",
         "colbert",
+        "vlm_embedding",
         "vlm_sft",
         "vlm_dpo",
         "grpo",

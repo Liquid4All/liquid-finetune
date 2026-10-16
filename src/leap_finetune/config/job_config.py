@@ -15,6 +15,7 @@ TrainingType = Literal[
     "kto",
     "embedding",
     "colbert",
+    "vlm_embedding",
     "vlm_sft",
     "vlm_dpo",
     "moe_sft",
@@ -29,6 +30,7 @@ DatasetType = Literal[
     "kto",
     "embedding",
     "colbert",
+    "vlm_embedding",
     "vlm_sft",
     "vlm_dpo",
     "grpo",
@@ -280,7 +282,7 @@ class JobConfig(BaseModel):
                 f"Invalid job name '{resolved_job_name}': only letters, numbers, hyphens, and underscores allowed"
             )
 
-        retrieval_types = {"embedding", "colbert"}
+        retrieval_types = {"embedding", "colbert", "vlm_embedding"}
         if (
             self.training_type in retrieval_types
             or self.dataset.type in retrieval_types
@@ -290,18 +292,18 @@ class JobConfig(BaseModel):
                 f"got {self.training_type!r} and {self.dataset.type!r}."
             )
         if (
-            self.training_type in retrieval_types
+            self.training_type in {"embedding", "colbert"}
             and self.peft_config is not None
             and self.peft_config.use_peft is not False
         ):
             raise ValueError("PEFT is not yet supported for retrieval training")
         if self.training_type in retrieval_types:
             train_config = self.training_config
-            expected_base = (
-                "DEFAULT_EMBEDDING"
-                if self.training_type == "embedding"
-                else "DEFAULT_COLBERT"
-            )
+            expected_base = {
+                "embedding": "DEFAULT_EMBEDDING",
+                "colbert": "DEFAULT_COLBERT",
+                "vlm_embedding": "DEFAULT_VLM_EMBEDDING",
+            }[self.training_type]
             if (
                 train_config.extends_name() is not None
                 and train_config.extends_name() != expected_base
@@ -334,12 +336,19 @@ class JobConfig(BaseModel):
                     raise ValueError(
                         "training_config.temperature is only valid for ColBERT"
                     )
-            else:
+            elif self.training_type == "colbert":
                 allowed_losses = {"contrastive", "cached_contrastive"}
                 effective_loss = train_config.loss or "contrastive"
                 if train_config.prompts is not None:
                     raise ValueError(
                         "training_config.prompts is only valid for embedding"
+                    )
+            else:
+                allowed_losses = {"contrastive"}
+                effective_loss = train_config.loss or "contrastive"
+                if train_config.prompts is not None:
+                    raise ValueError(
+                        "training_config.prompts is only valid for text embedding"
                     )
 
             if effective_loss not in allowed_losses:

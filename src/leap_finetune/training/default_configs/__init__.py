@@ -11,6 +11,7 @@ from leap_finetune.training.default_configs.grpo_configs import (
 from leap_finetune.training.default_configs.retrieval_configs import (
     DEFAULT_COLBERT,
     DEFAULT_EMBEDDING,
+    DEFAULT_VLM_EMBEDDING,
 )
 from leap_finetune.training.default_configs.kto_configs import DEFAULT_KTO
 from leap_finetune.training.default_configs.sft_configs import DEFAULT_SFT, MOE_SFT
@@ -30,6 +31,7 @@ TRAINING_DEFAULTS = {
     "DEFAULT_KTO": DEFAULT_KTO,
     "DEFAULT_EMBEDDING": DEFAULT_EMBEDDING,
     "DEFAULT_COLBERT": DEFAULT_COLBERT,
+    "DEFAULT_VLM_EMBEDDING": DEFAULT_VLM_EMBEDDING,
     "DEFAULT_VLM_SFT": DEFAULT_VLM_SFT,
     "DEFAULT_VLM_DPO": DEFAULT_VLM_DPO,
     "MOE_SFT": MOE_SFT,
@@ -52,6 +54,7 @@ __all__ = [
     "DEFAULT_DPO",
     "DEFAULT_EMBEDDING",
     "DEFAULT_COLBERT",
+    "DEFAULT_VLM_EMBEDDING",
     "DEFAULT_GRPO",
     "DEFAULT_KTO",
     "DEFAULT_LORA",

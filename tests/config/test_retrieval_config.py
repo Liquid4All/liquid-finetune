@@ -93,6 +93,47 @@ peft_config:
         parse_job_config(config_path)
 
 
+def test_vlm_embedding_config_accepts_vlm_lora(tmp_path):
+    data_path = tmp_path / "vlm-retrieval.jsonl"
+    data_path.write_text(
+        '{"query":{"instruction":"retrieve","text":"q"},'
+        '"positive":{"instruction":"represent","text":"p"},'
+        '"negative":{"instruction":"represent","text":"n"}}\n',
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "vlm-embedding.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "project_name": "vlm-embedding-test",
+                "model_name": "LiquidAI/LFM2.5-VL-450M",
+                "training_type": "vlm_embedding",
+                "dataset": {
+                    "path": str(data_path),
+                    "type": "vlm_embedding",
+                    "test_size": 0.5,
+                },
+                "training_config": {
+                    "extends": "DEFAULT_VLM_EMBEDDING",
+                    "temperature": 0.03,
+                },
+                "peft_config": {
+                    "extends": "DEFAULT_VLM_LORA",
+                    "use_peft": True,
+                    "r": 32,
+                    "lora_alpha": 32,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    job = materialize_job_config(parse_job_config(config_path))
+    assert job.training_type == "vlm_embedding"
+    assert job.dataset.dataset_type == "vlm_embedding"
+    assert job.training_config.value["temperature"] == 0.03
+    assert job.peft_config.value.r == 32
+
+
 def _write_retrieval_config(tmp_path, training_type, training_config):
     data_path = tmp_path / "retrieval.jsonl"
     data_path.write_text(

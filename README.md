@@ -226,6 +226,7 @@ Useful starter configs:
 | DPO                     | [`job_configs/dpo_example.yaml`](./job_configs/dpo_example.yaml)                               |
 | Dense embedding         | [`job_configs/embedding_example.yaml`](./job_configs/embedding_example.yaml)                   |
 | ColBERT                 | [`job_configs/colbert_example.yaml`](./job_configs/colbert_example.yaml)                       |
+| VLM embedding           | [`job_configs/vlm_embedding_example.yaml`](./job_configs/vlm_embedding_example.yaml)           |
 | VLM SFT                 | [`job_configs/vlm_sft_example.yaml`](./job_configs/vlm_sft_example.yaml)                       |
 | VLM DPO                 | [`job_configs/vlm_dpo_example.yaml`](./job_configs/vlm_dpo_example.yaml)                       |
 | GRPO                    | [`job_configs/grpo_example.yaml`](./job_configs/grpo_example.yaml)                             |
@@ -573,6 +574,35 @@ Gradient accumulation is intentionally rejected—select a cached loss and set
 uv run leap-finetune job_configs/embedding_example.yaml
 uv run leap-finetune job_configs/colbert_example.yaml
 ```
+
+Use `training_type: "vlm_embedding"` to adapt a generative VLM as a
+single-vector text, image, or interleaved encoder while preserving its original
+checkpoint architecture. Each role is an instruction plus non-empty text, an
+image, or both:
+
+```json
+{
+  "query": {
+    "instruction": "Represent this query for retrieval.",
+    "text": "question"
+  },
+  "positive": {
+    "instruction": "Represent this content for retrieval.",
+    "image": "/data/relevant.png"
+  },
+  "negative": {
+    "instruction": "Represent this content for retrieval.",
+    "image": "/data/irrelevant.png"
+  }
+}
+```
+
+The processor renders every role through the model chat template with an
+assistant generation prefix and explicit left padding. Training pools the final
+attended hidden state, L2-normalizes the complete native vector, and applies
+query-to-document InfoNCE over the batch positives and explicit hard negatives.
+No coordinate truncation or projection is applied. Gradient accumulation is
+rejected because it changes the in-batch-negative set.
 
 ### VLM SFT
 
