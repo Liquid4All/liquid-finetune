@@ -1,0 +1,48 @@
+[vlm_embedding]
+description = "Native-dimension assistant-prefix contrastive adaptation for generative vision-language checkpoints."
+mode = "adapter"
+modality = "image"
+command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}}"
+gpus = 1
+cpus = 16
+nodes = 1
+tasks_per_node = 1
+memory = "256G"
+time = "01:00:00"
+needs_ray = false
+slurm_partition = "gpuworker"
+
+[vlm_embedding.args.learning_rate]
+type = "float"
+default = 2e-5
+description = "Peak LoRA learning rate."
+
+[vlm_embedding.args.batch_size]
+type = "int"
+default = 8
+description = "Per-device contrastive batch size."
+
+[vlm_embedding.args.max_steps]
+type = "int"
+default = 30
+description = "Optimizer steps; 20-50 is the intended tiny-overfit range."
+
+[vlm_embedding.args.temperature]
+type = "float"
+default = 0.02
+description = "InfoNCE softmax temperature."
+
+[vlm_embedding.args.max_image_tokens]
+type = "int"
+default = 256
+description = "Maximum image token budget per visual input."
+
+[vlm_embedding.args.lora_rank]
+type = "int"
+default = 32
+description = "LoRA rank."
+
+[vlm_embedding.args.lora_alpha]
+type = "int"
+default = 32
+description = "LoRA alpha."
