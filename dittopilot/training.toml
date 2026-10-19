@@ -19,13 +19,13 @@ description = "Peak LoRA learning rate."
 
 [vlm_embedding.args.batch_size]
 type = "int"
-default = 16
-description = "Per-device contrastive batch size."
+default = 32
+description = "Per-device contrastive batch size; all 32 rows share the in-batch candidate pool."
 
 [vlm_embedding.args.gradient_accumulation_steps]
 type = "int"
-default = 2
-description = "Gradient accumulation steps; the default effective batch is 32."
+default = 1
+description = "Must remain 1 for in-batch contrastive loss; use cached loss for larger effective batches."
 
 [vlm_embedding.args.max_steps]
 type = "int"

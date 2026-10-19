@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import tomllib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -93,6 +95,14 @@ def test_contrastive_loss_honors_candidate_mask():
     )
 
     torch.testing.assert_close(loss, torch.tensor(0.6931472))
+
+
+def test_registered_vlm_embedding_defaults_use_one_physical_contrastive_batch():
+    config = Path(__file__).parents[2] / "dittopilot" / "training.toml"
+    registered = tomllib.loads(config.read_text())["vlm_embedding"]["args"]
+
+    assert registered["batch_size"]["default"] == 32
+    assert registered["gradient_accumulation_steps"]["default"] == 1
 
 
 class _FakeProcessor:
