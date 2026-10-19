@@ -8,6 +8,7 @@ from datasets import Dataset
 from PIL import Image
 
 from leap_finetune.data_loading.vlm_embedding import (
+    build_candidate_mask,
     create_vlm_embedding_collate_fn,
 )
 from leap_finetune.data_loading.validate_dataset_format import (
@@ -46,6 +47,54 @@ def test_contrastive_embedding_loss_prefers_aligned_pairs():
         contrastive_embedding_loss(query, positive, negative, temperature=0)
 
 
+def test_candidate_mask_uses_task_semantics_and_masks_duplicate_positives():
+    samples = [
+        {
+            "loss_kind": "retrieval",
+            "loss_group": "text",
+            "positive_key": "same",
+            "negative_key": "n0",
+        },
+        {
+            "loss_kind": "retrieval",
+            "loss_group": "text",
+            "positive_key": "same",
+            "negative_key": "n1",
+        },
+        {
+            "loss_kind": "explicit",
+            "loss_group": "text",
+            "positive_key": "p2",
+            "negative_key": "n2",
+        },
+    ]
+
+    mask = build_candidate_mask(samples)
+
+    assert mask.tolist() == [
+        [True, False, True, True, True, True],
+        [False, True, True, True, True, True],
+        [False, False, True, False, False, True],
+    ]
+
+
+def test_contrastive_loss_honors_candidate_mask():
+    query = torch.eye(2)
+    positive = torch.eye(2)
+    negative = torch.eye(2)
+    explicit = torch.tensor([[True, False, True, False], [False, True, False, True]])
+
+    loss = contrastive_embedding_loss(
+        query,
+        positive,
+        negative,
+        temperature=0.1,
+        candidate_mask=explicit,
+    )
+
+    torch.testing.assert_close(loss, torch.tensor(0.6931472))
+
+
 class _FakeProcessor:
     def __init__(self):
         self.tokenizer = SimpleNamespace(padding_side="right")
@@ -70,7 +119,7 @@ def test_vlm_embedding_collator_uses_assistant_prefix_and_left_padding():
         ]
     )
     assert processor.tokenizer.padding_side == "left"
-    assert set(batch) == {"query", "positive", "negative"}
+    assert set(batch) == {"query", "positive", "negative", "candidate_mask"}
     assert len(processor.calls) == 3
     assert all(call[1]["add_generation_prompt"] for call in processor.calls)
     assert all(call[1]["padding"] for call in processor.calls)

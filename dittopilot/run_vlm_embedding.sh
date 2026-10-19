@@ -5,13 +5,18 @@ CHECKPOINT=""
 DATASET=""
 OUTPUT=""
 RUN_NAME=""
-LEARNING_RATE="2e-5"
-BATCH_SIZE="8"
-MAX_STEPS="30"
+LEARNING_RATE="1e-4"
+BATCH_SIZE="16"
+GRADIENT_ACCUMULATION_STEPS="2"
+MAX_STEPS="3000"
 TEMPERATURE="0.02"
 MAX_IMAGE_TOKENS="256"
-LORA_RANK="32"
-LORA_ALPHA="32"
+LORA_RANK="64"
+LORA_ALPHA="64"
+WARMUP_RATIO="0.05"
+WEIGHT_DECAY="0.01"
+SAVE_STEPS="500"
+SEED="20261019"
 
 while (($#)); do
   case "$1" in
@@ -21,11 +26,16 @@ while (($#)); do
     --run-name) RUN_NAME="$2"; shift 2 ;;
     --learning-rate) LEARNING_RATE="$2"; shift 2 ;;
     --batch-size) BATCH_SIZE="$2"; shift 2 ;;
+    --gradient-accumulation-steps) GRADIENT_ACCUMULATION_STEPS="$2"; shift 2 ;;
     --max-steps) MAX_STEPS="$2"; shift 2 ;;
     --temperature) TEMPERATURE="$2"; shift 2 ;;
     --max-image-tokens) MAX_IMAGE_TOKENS="$2"; shift 2 ;;
     --lora-rank) LORA_RANK="$2"; shift 2 ;;
     --lora-alpha) LORA_ALPHA="$2"; shift 2 ;;
+    --warmup-ratio) WARMUP_RATIO="$2"; shift 2 ;;
+    --weight-decay) WEIGHT_DECAY="$2"; shift 2 ;;
+    --save-steps) SAVE_STEPS="$2"; shift 2 ;;
+    --seed) SEED="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -42,6 +52,13 @@ if [[ ! -d "${CHECKPOINT}" ]]; then
 fi
 if [[ ! -e "${DATASET}" ]]; then
   echo "Dataset path does not exist: ${DATASET}" >&2
+  exit 2
+fi
+if [[ -d "${DATASET}" ]]; then
+  DATASET="${DATASET}/train.jsonl"
+fi
+if [[ ! -f "${DATASET}" ]]; then
+  echo "Training JSONL does not exist: ${DATASET}" >&2
   exit 2
 fi
 if [[ -e "${OUTPUT}" ]]; then
@@ -70,15 +87,22 @@ training_config:
   max_steps: ${MAX_STEPS}
   per_device_train_batch_size: ${BATCH_SIZE}
   per_device_eval_batch_size: ${BATCH_SIZE}
+  gradient_accumulation_steps: ${GRADIENT_ACCUMULATION_STEPS}
   learning_rate: ${LEARNING_RATE}
+  warmup_ratio: ${WARMUP_RATIO}
+  weight_decay: ${WEIGHT_DECAY}
+  seed: ${SEED}
+  data_seed: ${SEED}
   temperature: ${TEMPERATURE}
   max_image_tokens: ${MAX_IMAGE_TOKENS}
   eval_strategy: "no"
   eval_on_start: false
   save_strategy: "steps"
-  save_steps: ${MAX_STEPS}
-  save_total_limit: 1
-  logging_steps: 1
+  save_steps: ${SAVE_STEPS}
+  save_total_limit: 2
+  logging_steps: 10
+  dataloader_num_workers: 8
+  dataloader_prefetch_factor: 4
   leap_run_name_template: "vlm-embedding-lora_a"
   tracker: "none"
 peft_config:

@@ -72,6 +72,7 @@ def contrastive_embedding_loss(
     negative: torch.Tensor,
     *,
     temperature: float,
+    candidate_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Query-to-document InfoNCE over positives and explicit hard negatives."""
 
@@ -83,6 +84,17 @@ def contrastive_embedding_loss(
         )
     candidates = torch.cat((positive, negative), dim=0)
     logits = query @ candidates.transpose(0, 1)
+    if candidate_mask is not None:
+        if candidate_mask.shape != logits.shape:
+            raise ValueError(
+                "candidate mask must have shape "
+                f"{tuple(logits.shape)}, got {tuple(candidate_mask.shape)}"
+            )
+        candidate_mask = candidate_mask.to(device=logits.device, dtype=torch.bool)
+        labels = torch.arange(query.shape[0], device=query.device)
+        if not torch.all(candidate_mask[labels, labels]):
+            raise ValueError("candidate mask must retain every paired positive")
+        logits = logits.masked_fill(~candidate_mask, torch.finfo(logits.dtype).min)
     labels = torch.arange(query.shape[0], device=query.device)
     return F.cross_entropy(logits / temperature, labels)
 
@@ -130,6 +142,7 @@ class LFMVLMEmbeddingTrainer(RayDataLoaderMixin, Trainer):
             embeddings["positive"],
             embeddings["negative"],
             temperature=self.embedding_temperature,
+            candidate_mask=cast(torch.Tensor | None, inputs.get("candidate_mask")),
         )
         return (loss, embeddings) if return_outputs else loss
 
