@@ -8,6 +8,7 @@ RUN_NAME=""
 LEARNING_RATE="1e-4"
 BATCH_SIZE="32"
 GRADIENT_ACCUMULATION_STEPS="1"
+GRADIENT_CHECKPOINTING="false"
 MAX_STEPS="3000"
 TEMPERATURE="0.02"
 MAX_IMAGE_TOKENS="256"
@@ -16,6 +17,7 @@ LORA_ALPHA="64"
 WARMUP_RATIO="0.05"
 WEIGHT_DECAY="0.01"
 SAVE_STEPS="500"
+TRACKER="wandb"
 SEED="20261019"
 
 while (($#)); do
@@ -27,6 +29,7 @@ while (($#)); do
     --learning-rate) LEARNING_RATE="$2"; shift 2 ;;
     --batch-size) BATCH_SIZE="$2"; shift 2 ;;
     --gradient-accumulation-steps) GRADIENT_ACCUMULATION_STEPS="$2"; shift 2 ;;
+    --gradient-checkpointing) GRADIENT_CHECKPOINTING="$2"; shift 2 ;;
     --max-steps) MAX_STEPS="$2"; shift 2 ;;
     --temperature) TEMPERATURE="$2"; shift 2 ;;
     --max-image-tokens) MAX_IMAGE_TOKENS="$2"; shift 2 ;;
@@ -35,10 +38,20 @@ while (($#)); do
     --warmup-ratio) WARMUP_RATIO="$2"; shift 2 ;;
     --weight-decay) WEIGHT_DECAY="$2"; shift 2 ;;
     --save-steps) SAVE_STEPS="$2"; shift 2 ;;
+    --tracker) TRACKER="$2"; shift 2 ;;
     --seed) SEED="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+case "${GRADIENT_CHECKPOINTING}" in
+  true|false) ;;
+  *) echo "gradient-checkpointing must be true or false" >&2; exit 2 ;;
+esac
+case "${TRACKER}" in
+  wandb|none) ;;
+  *) echo "tracker must be wandb or none" >&2; exit 2 ;;
+esac
 
 for value in CHECKPOINT DATASET OUTPUT RUN_NAME; do
   if [[ -z "${!value}" ]]; then
@@ -88,6 +101,7 @@ training_config:
   per_device_train_batch_size: ${BATCH_SIZE}
   per_device_eval_batch_size: ${BATCH_SIZE}
   gradient_accumulation_steps: ${GRADIENT_ACCUMULATION_STEPS}
+  gradient_checkpointing: ${GRADIENT_CHECKPOINTING}
   learning_rate: ${LEARNING_RATE}
   warmup_ratio: ${WARMUP_RATIO}
   weight_decay: ${WEIGHT_DECAY}
@@ -104,7 +118,7 @@ training_config:
   dataloader_num_workers: 8
   dataloader_prefetch_factor: 4
   leap_run_name_template: "vlm-embedding-lora_a"
-  tracker: "none"
+  tracker: "${TRACKER}"
 peft_config:
   extends: "DEFAULT_VLM_LORA"
   use_peft: true
@@ -112,6 +126,14 @@ peft_config:
   lora_alpha: ${LORA_ALPHA}
   lora_dropout: 0.0
 EOF
+
+if [[ "${TRACKER}" == "wandb" ]]; then
+  export WANDB_MODE="${WANDB_MODE:-online}"
+  export WANDB_ENTITY="${WANDB_ENTITY:-liquid-ai}"
+  export WANDB_PROJECT="${WANDB_PROJECT:-retrieval-lfm}"
+  export WANDB_DIR="${WANDB_DIR:-$(dirname "${OUTPUT}")/wandb}"
+  mkdir -p "${WANDB_DIR}"
+fi
 
 UV_PROJECT_ARGS=()
 if [[ "${DITTOPILOT_CLUSTER:-local}" == "amd" ]]; then

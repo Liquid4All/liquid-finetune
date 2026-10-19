@@ -2,7 +2,7 @@
 description = "Native-dimension assistant-prefix contrastive adaptation for generative vision-language checkpoints."
 mode = "adapter"
 modality = "image"
-command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --seed {{seed}}"
+command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --gradient-checkpointing {{gradient_checkpointing}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --tracker {{tracker}} --seed {{seed}}"
 gpus = 1
 cpus = 16
 nodes = 1
@@ -26,6 +26,11 @@ description = "Per-device contrastive batch size; all 32 rows share the in-batch
 type = "int"
 default = 1
 description = "Must remain 1 for in-batch contrastive loss; use cached loss for larger effective batches."
+
+[vlm_embedding.args.gradient_checkpointing]
+type = "str"
+default = "false"
+description = "Whether to recompute backbone activations during backward; false is preferred when the physical batch fits in HBM."
 
 [vlm_embedding.args.max_steps]
 type = "int"
@@ -66,6 +71,11 @@ description = "AdamW weight decay."
 type = "int"
 default = 500
 description = "Checkpoint interval in optimizer steps."
+
+[vlm_embedding.args.tracker]
+type = "str"
+default = "wandb"
+description = "Experiment tracker; supported values are wandb and none."
 
 [vlm_embedding.args.seed]
 type = "int"

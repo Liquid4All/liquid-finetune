@@ -103,6 +103,18 @@ def test_registered_vlm_embedding_defaults_use_one_physical_contrastive_batch():
 
     assert registered["batch_size"]["default"] == 32
     assert registered["gradient_accumulation_steps"]["default"] == 1
+    assert registered["gradient_checkpointing"]["default"] == "false"
+    assert registered["tracker"]["default"] == "wandb"
+
+
+def test_dittopilot_vlm_embedding_exposes_memory_and_tracking_controls():
+    root = Path(__file__).parents[2]
+    runner = (root / "dittopilot" / "run_vlm_embedding.sh").read_text()
+
+    assert "gradient_checkpointing: ${GRADIENT_CHECKPOINTING}" in runner
+    assert 'tracker: "${TRACKER}"' in runner
+    assert 'WANDB_MODE="${WANDB_MODE:-online}"' in runner
+    assert 'WANDB_PROJECT="${WANDB_PROJECT:-retrieval-lfm}"' in runner
 
 
 def test_dittopilot_uses_pinned_rocm_project_on_amd():
