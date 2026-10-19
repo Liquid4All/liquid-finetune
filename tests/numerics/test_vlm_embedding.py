@@ -105,6 +105,15 @@ def test_registered_vlm_embedding_defaults_use_one_physical_contrastive_batch():
     assert registered["gradient_accumulation_steps"]["default"] == 1
 
 
+def test_dittopilot_uses_pinned_rocm_project_on_amd():
+    root = Path(__file__).parents[2]
+    setup = (root / "dittopilot" / "setup.sh").read_text()
+    runner = (root / "dittopilot" / "run_vlm_embedding.sh").read_text()
+
+    assert "uv sync --project envs/rocm" in setup
+    assert "UV_PROJECT_ARGS=(--project envs/rocm)" in runner
+
+
 class _FakeProcessor:
     def __init__(self):
         self.tokenizer = SimpleNamespace(padding_side="right")

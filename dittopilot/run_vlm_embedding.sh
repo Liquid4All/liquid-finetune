@@ -113,7 +113,11 @@ peft_config:
   lora_dropout: 0.0
 EOF
 
-OUTPUT_DIR="${STAGING_ROOT}" uv run leap-finetune "${CONFIG_PATH}"
+UV_PROJECT_ARGS=()
+if [[ "${DITTOPILOT_CLUSTER:-local}" == "amd" ]]; then
+  UV_PROJECT_ARGS=(--project envs/rocm)
+fi
+OUTPUT_DIR="${STAGING_ROOT}" uv run "${UV_PROJECT_ARGS[@]}" leap-finetune "${CONFIG_PATH}"
 
 MERGED_DIR="$(find "${STAGING_ROOT}" -type f -name config.json -printf '%h\n' | while read -r candidate; do
   if compgen -G "${candidate}/*.safetensors" >/dev/null; then
