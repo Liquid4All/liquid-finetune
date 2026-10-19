@@ -35,11 +35,17 @@ logger = logging.getLogger(__name__)
 _RUNTIME_KEYS = {
     "adapter_path",
     "do_image_splitting",
+    "gradient_checkpointing_scope",
     "leap_run_name_template",
     "loss",
     "max_image_tokens",
     "min_image_tokens",
     "temperature",
+}
+
+_GRADIENT_CHECKPOINTING_COMPONENTS = {
+    "language": "language_model",
+    "vision": "vision_tower",
 }
 
 
@@ -109,6 +115,37 @@ def _vlm_backbone(model):
     return backbone
 
 
+def configure_gradient_checkpointing(model: nn.Module, scope: str) -> bool:
+    """Configure whole-model or component-selective activation checkpointing.
+
+    Returns whether ``TrainingArguments.gradient_checkpointing`` should remain
+    enabled. Selective modes are enabled directly on the requested backbone
+    component so Trainer does not immediately re-enable checkpointing globally.
+    """
+
+    valid_scopes = {"all", "none", *_GRADIENT_CHECKPOINTING_COMPONENTS}
+    if scope not in valid_scopes:
+        choices = ", ".join(sorted(valid_scopes))
+        raise ValueError(
+            f"gradient_checkpointing_scope must be one of {choices}, got {scope!r}"
+        )
+    if scope == "all":
+        return True
+    if scope == "none":
+        return False
+
+    component_name = _GRADIENT_CHECKPOINTING_COMPONENTS[scope]
+    component = getattr(_vlm_backbone(model), component_name, None)
+    enable = getattr(component, "gradient_checkpointing_enable", None)
+    if not callable(enable):
+        raise TypeError(
+            f"VLM backbone component {component_name!r} does not support "
+            "gradient checkpointing"
+        )
+    enable()
+    return False
+
+
 class LFMVLMEmbeddingTrainer(RayDataLoaderMixin, Trainer):
     """Trainer that preserves the generative checkpoint and optimizes native states."""
 
@@ -165,6 +202,7 @@ def vlm_embedding_run(
     resume_from = train_config.get("resume_from_checkpoint")
     adapter_path = train_config.get("adapter_path")
     temperature = float(train_config.get("temperature", 0.02))
+    checkpointing_scope = train_config.get("gradient_checkpointing_scope", "auto")
 
     filtered, _ = filter_runtime_config_kwargs(
         train_config,
@@ -173,6 +211,11 @@ def vlm_embedding_run(
     )
     if not filtered.get("dataloader_num_workers", 0):
         filtered.pop("dataloader_prefetch_factor", None)
+    if checkpointing_scope == "auto":
+        checkpointing_scope = (
+            "all" if filtered.get("gradient_checkpointing", False) else "none"
+        )
+    filtered["gradient_checkpointing"] = checkpointing_scope == "all"
     filtered.setdefault("remove_unused_columns", False)
     tracker = init_tracking_from_config(
         job_name,
@@ -198,6 +241,7 @@ def vlm_embedding_run(
         trainable_model = load_peft_adapter(trainable_model, adapter_path)
     elif peft_config:
         trainable_model = apply_peft_to_model(trainable_model, peft_config)
+    configure_gradient_checkpointing(trainable_model, checkpointing_scope)
 
     trainer = LFMVLMEmbeddingTrainer(
         temperature=temperature,
@@ -228,6 +272,7 @@ def vlm_embedding_run(
 
 __all__ = [
     "LFMVLMEmbeddingTrainer",
+    "configure_gradient_checkpointing",
     "contrastive_embedding_loss",
     "pool_last_attended_token",
     "vlm_embedding_run",

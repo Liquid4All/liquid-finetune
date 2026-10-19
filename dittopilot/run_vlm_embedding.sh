@@ -9,6 +9,7 @@ LEARNING_RATE="1e-4"
 BATCH_SIZE="32"
 GRADIENT_ACCUMULATION_STEPS="1"
 GRADIENT_CHECKPOINTING="false"
+GRADIENT_CHECKPOINTING_SCOPE="auto"
 MAX_STEPS="3000"
 TEMPERATURE="0.02"
 MAX_IMAGE_TOKENS="256"
@@ -30,6 +31,7 @@ while (($#)); do
     --batch-size) BATCH_SIZE="$2"; shift 2 ;;
     --gradient-accumulation-steps) GRADIENT_ACCUMULATION_STEPS="$2"; shift 2 ;;
     --gradient-checkpointing) GRADIENT_CHECKPOINTING="$2"; shift 2 ;;
+    --gradient-checkpointing-scope) GRADIENT_CHECKPOINTING_SCOPE="$2"; shift 2 ;;
     --max-steps) MAX_STEPS="$2"; shift 2 ;;
     --temperature) TEMPERATURE="$2"; shift 2 ;;
     --max-image-tokens) MAX_IMAGE_TOKENS="$2"; shift 2 ;;
@@ -47,6 +49,10 @@ done
 case "${GRADIENT_CHECKPOINTING}" in
   true|false) ;;
   *) echo "gradient-checkpointing must be true or false" >&2; exit 2 ;;
+esac
+case "${GRADIENT_CHECKPOINTING_SCOPE}" in
+  auto|all|language|vision|none) ;;
+  *) echo "gradient-checkpointing-scope must be auto, all, language, vision, or none" >&2; exit 2 ;;
 esac
 case "${TRACKER}" in
   wandb|none) ;;
@@ -102,6 +108,7 @@ training_config:
   per_device_eval_batch_size: ${BATCH_SIZE}
   gradient_accumulation_steps: ${GRADIENT_ACCUMULATION_STEPS}
   gradient_checkpointing: ${GRADIENT_CHECKPOINTING}
+  gradient_checkpointing_scope: "${GRADIENT_CHECKPOINTING_SCOPE}"
   learning_rate: ${LEARNING_RATE}
   warmup_ratio: ${WARMUP_RATIO}
   weight_decay: ${WEIGHT_DECAY}

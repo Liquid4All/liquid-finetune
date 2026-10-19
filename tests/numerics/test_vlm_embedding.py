@@ -18,6 +18,7 @@ from leap_finetune.data_loading.validate_dataset_format import (
     validate_dataset_format,
 )
 from leap_finetune.training.vlm_embedding import (
+    configure_gradient_checkpointing,
     contrastive_embedding_loss,
     pool_last_attended_token,
 )
@@ -104,6 +105,7 @@ def test_registered_vlm_embedding_defaults_use_one_physical_contrastive_batch():
     assert registered["batch_size"]["default"] == 32
     assert registered["gradient_accumulation_steps"]["default"] == 1
     assert registered["gradient_checkpointing"]["default"] == "false"
+    assert registered["gradient_checkpointing_scope"]["default"] == "auto"
     assert registered["tracker"]["default"] == "wandb"
 
 
@@ -112,9 +114,50 @@ def test_dittopilot_vlm_embedding_exposes_memory_and_tracking_controls():
     runner = (root / "dittopilot" / "run_vlm_embedding.sh").read_text()
 
     assert "gradient_checkpointing: ${GRADIENT_CHECKPOINTING}" in runner
+    assert 'gradient_checkpointing_scope: "${GRADIENT_CHECKPOINTING_SCOPE}"' in runner
     assert 'tracker: "${TRACKER}"' in runner
     assert 'WANDB_MODE="${WANDB_MODE:-online}"' in runner
     assert 'WANDB_PROJECT="${WANDB_PROJECT:-retrieval-lfm}"' in runner
+
+
+class _Checkpointable:
+    def __init__(self) -> None:
+        self.enabled = False
+
+    def gradient_checkpointing_enable(self) -> None:
+        self.enabled = True
+
+
+class _CheckpointingModel:
+    def __init__(self) -> None:
+        self.model = SimpleNamespace(
+            language_model=_Checkpointable(),
+            vision_tower=_Checkpointable(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("scope", "trainer_enabled", "language_enabled", "vision_enabled"),
+    [
+        ("none", False, False, False),
+        ("all", True, False, False),
+        ("language", False, True, False),
+        ("vision", False, False, True),
+    ],
+)
+def test_configure_gradient_checkpointing_scope(
+    scope, trainer_enabled, language_enabled, vision_enabled
+):
+    model = _CheckpointingModel()
+
+    assert configure_gradient_checkpointing(model, scope) is trainer_enabled
+    assert model.model.language_model.enabled is language_enabled
+    assert model.model.vision_tower.enabled is vision_enabled
+
+
+def test_configure_gradient_checkpointing_rejects_unknown_scope():
+    with pytest.raises(ValueError, match="gradient_checkpointing_scope"):
+        configure_gradient_checkpointing(_CheckpointingModel(), "decoder")
 
 
 def test_dittopilot_uses_pinned_rocm_project_on_amd():
