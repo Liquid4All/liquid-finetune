@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import tomllib
+import types
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +13,7 @@ from PIL import Image
 
 from leap_finetune.data_loading.vlm_embedding import (
     build_candidate_mask,
+    collate_raw_vlm_embedding_samples,
     create_vlm_embedding_collate_fn,
 )
 from leap_finetune.data_loading.validate_dataset_format import (
@@ -18,6 +21,7 @@ from leap_finetune.data_loading.validate_dataset_format import (
     validate_dataset_format,
 )
 from leap_finetune.training.vlm_embedding import (
+    CachedLFMVLMEmbeddingTrainer,
     configure_gradient_checkpointing,
     contrastive_embedding_loss,
     pool_last_attended_token,
@@ -54,19 +58,18 @@ def test_candidate_mask_uses_task_semantics_and_masks_duplicate_positives():
     samples = [
         {
             "loss_kind": "retrieval",
-            "loss_group": "text",
+            "candidate_group": "text",
             "positive_key": "same",
             "negative_key": "n0",
         },
         {
             "loss_kind": "retrieval",
-            "loss_group": "text",
+            "candidate_group": "text",
             "positive_key": "same",
             "negative_key": "n1",
         },
         {
-            "loss_kind": "explicit",
-            "loss_group": "text",
+            "loss_kind": "multiple_choice",
             "positive_key": "p2",
             "negative_key": "n2",
         },
@@ -79,6 +82,43 @@ def test_candidate_mask_uses_task_semantics_and_masks_duplicate_positives():
         [False, True, True, True, True, True],
         [False, False, True, False, False, True],
     ]
+
+
+def test_candidate_mask_shares_only_one_class_ontology():
+    samples = [
+        {
+            "loss_kind": "classification",
+            "candidate_set_id": "imagenet",
+            "positive_key": "dog",
+            "negative_key": "cat",
+        },
+        {
+            "loss_kind": "classification",
+            "candidate_set_id": "imagenet",
+            "positive_key": "cat",
+            "negative_key": "plane",
+        },
+        {
+            "loss_kind": "classification",
+            "candidate_set_id": "sun397",
+            "positive_key": "kitchen",
+            "negative_key": "street",
+        },
+    ]
+
+    mask = build_candidate_mask(samples)
+
+    assert mask.tolist() == [
+        [True, True, False, True, True, False],
+        [True, True, False, False, True, False],
+        [False, False, True, False, False, True],
+    ]
+
+
+def test_raw_collator_preserves_one_logical_batch():
+    samples = [{"id": "a"}, {"id": "b"}]
+
+    assert collate_raw_vlm_embedding_samples(samples) == {"samples": samples}
 
 
 def test_contrastive_loss_honors_candidate_mask():
@@ -98,11 +138,72 @@ def test_contrastive_loss_honors_candidate_mask():
     torch.testing.assert_close(loss, torch.tensor(0.6931472))
 
 
-def test_registered_vlm_embedding_defaults_use_one_physical_contrastive_batch():
+def test_cached_contrastive_replay_matches_full_batch_gradient():
+    samples = [
+        {
+            "loss_kind": "retrieval",
+            "candidate_group": "text",
+            "positive_key": f"p{index}",
+            "negative_key": f"n{index}",
+            "query": torch.tensor([1.0 + index, 0.5, -0.25]),
+            "positive": torch.tensor([0.75, 1.0 + index, 0.25]),
+            "negative": torch.tensor([-0.5, 0.25, 1.0 + index]),
+        }
+        for index in range(4)
+    ]
+    cached_model = torch.nn.Linear(3, 2, bias=False)
+    full_model = torch.nn.Linear(3, 2, bias=False)
+    full_model.load_state_dict(cached_model.state_dict())
+
+    trainer = object.__new__(CachedLFMVLMEmbeddingTrainer)
+    trainer.micro_batch_size = 2
+    trainer.embedding_temperature = 0.2
+    trainer.optimizer = SimpleNamespace(train=lambda: None)
+    trainer.accelerator = SimpleNamespace(backward=lambda value: value.backward())
+    trainer.compute_loss_context_manager = lambda: nullcontext()
+    trainer._prepare_inputs = lambda value: value
+
+    def collate(chunk):
+        return {
+            role: {"x": torch.stack([sample[role] for sample in chunk])}
+            for role in ("query", "positive", "negative")
+        }
+
+    def encode(self, model, batch):
+        return torch.nn.functional.normalize(model(batch["x"]), dim=-1)
+
+    trainer._micro_collator = collate
+    trainer._encode = types.MethodType(encode, trainer)
+    cached_loss = trainer.training_step(cached_model, {"samples": samples})
+
+    full_embeddings = {
+        role: torch.nn.functional.normalize(
+            full_model(torch.stack([sample[role] for sample in samples])), dim=-1
+        )
+        for role in ("query", "positive", "negative")
+    }
+    full_loss = contrastive_embedding_loss(
+        full_embeddings["query"],
+        full_embeddings["positive"],
+        full_embeddings["negative"],
+        temperature=0.2,
+        candidate_mask=build_candidate_mask(samples),
+    )
+    full_loss.backward()
+
+    torch.testing.assert_close(cached_loss, full_loss.detach())
+    torch.testing.assert_close(cached_model.weight.grad, full_model.weight.grad)
+
+
+def test_registered_vlm_embedding_defaults_use_cached_logical_batch():
     config = Path(__file__).parents[2] / "dittopilot" / "training.toml"
     registered = tomllib.loads(config.read_text())["vlm_embedding"]["args"]
 
-    assert registered["batch_size"]["default"] == 32
+    assert registered["batch_size"]["default"] == 8192
+    assert registered["micro_batch_size"]["default"] == 32
+    assert registered["cached_loss"]["default"] == "true"
+    assert registered["max_steps"]["default"] == 80
+    assert registered["save_steps"]["default"] == 10
     assert registered["gradient_accumulation_steps"]["default"] == 1
     assert registered["gradient_checkpointing"]["default"] == "false"
     assert registered["gradient_checkpointing_scope"]["default"] == "auto"
@@ -116,6 +217,8 @@ def test_dittopilot_vlm_embedding_exposes_memory_and_tracking_controls():
     assert "gradient_checkpointing: ${GRADIENT_CHECKPOINTING}" in runner
     assert 'gradient_checkpointing_scope: "${GRADIENT_CHECKPOINTING_SCOPE}"' in runner
     assert 'tracker: "${TRACKER}"' in runner
+    assert "micro_batch_size: ${MICRO_BATCH_SIZE}" in runner
+    assert "cached_loss: ${CACHED_LOSS}" in runner
     assert 'WANDB_MODE="${WANDB_MODE:-online}"' in runner
     assert 'WANDB_PROJECT="${WANDB_PROJECT:-retrieval-lfm}"' in runner
 
@@ -197,6 +300,20 @@ def test_vlm_embedding_collator_uses_assistant_prefix_and_left_padding():
     assert len(processor.calls) == 3
     assert all(call[1]["add_generation_prompt"] for call in processor.calls)
     assert all(call[1]["padding"] for call in processor.calls)
+
+
+def test_vlm_embedding_collator_omits_empty_candidate_system_prompt():
+    processor = _FakeProcessor()
+    collator = create_vlm_embedding_collate_fn(processor)
+    query = {"instruction": "Classify the image.", "text": "query"}
+    label = {"instruction": "", "text": "class label"}
+
+    collator([{"query": query, "positive": label, "negative": label}])
+
+    query_messages = processor.calls[0][0][0]
+    positive_messages = processor.calls[1][0][0]
+    assert [message["role"] for message in query_messages] == ["system", "user"]
+    assert [message["role"] for message in positive_messages] == ["user"]
 
 
 def test_vlm_embedding_dataset_normalizes_relative_images(tmp_path):

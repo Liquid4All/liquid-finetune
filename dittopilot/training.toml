@@ -2,7 +2,7 @@
 description = "Native-dimension assistant-prefix contrastive adaptation for generative vision-language checkpoints."
 mode = "adapter"
 modality = "image"
-command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --gradient-checkpointing {{gradient_checkpointing}} --gradient-checkpointing-scope {{gradient_checkpointing_scope}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --tracker {{tracker}} --seed {{seed}}"
+command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --micro-batch-size {{micro_batch_size}} --cached-loss {{cached_loss}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --gradient-checkpointing {{gradient_checkpointing}} --gradient-checkpointing-scope {{gradient_checkpointing_scope}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --tracker {{tracker}} --seed {{seed}}"
 gpus = 1
 cpus = 16
 nodes = 1
@@ -19,8 +19,18 @@ description = "Peak LoRA learning rate."
 
 [vlm_embedding.args.batch_size]
 type = "int"
+default = 8192
+description = "Logical per-device contrastive batch size used by one exact InfoNCE softmax."
+
+[vlm_embedding.args.micro_batch_size]
+type = "int"
 default = 32
-description = "Per-device contrastive batch size; all 32 rows share the in-batch candidate pool."
+description = "Maximum number of rows encoded at once during cached gradient replay."
+
+[vlm_embedding.args.cached_loss]
+type = "str"
+default = "true"
+description = "Use exact two-pass cached contrastive loss; true or false."
 
 [vlm_embedding.args.gradient_accumulation_steps]
 type = "int"
@@ -39,8 +49,8 @@ description = "Activation-checkpointing scope: auto follows gradient_checkpointi
 
 [vlm_embedding.args.max_steps]
 type = "int"
-default = 3000
-description = "Optimizer steps; 3000 is one pass over the 96k-row v1 mixture at effective batch 32."
+default = 80
+description = "Logical-batch optimizer steps; approximately one pass over a 600k-row mixture at batch 8192."
 
 [vlm_embedding.args.temperature]
 type = "float"
@@ -74,7 +84,7 @@ description = "AdamW weight decay."
 
 [vlm_embedding.args.save_steps]
 type = "int"
-default = 500
+default = 10
 description = "Checkpoint interval in optimizer steps."
 
 [vlm_embedding.args.tracker]

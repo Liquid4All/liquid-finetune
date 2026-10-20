@@ -482,7 +482,7 @@ def get_row_filter(
         def valid_item(value: Any) -> bool:
             if not isinstance(value, dict):
                 return False
-            if not _is_nonempty_text(value.get("instruction")):
+            if not isinstance(value.get("instruction"), str):
                 return False
             text = value.get("text")
             image = value.get("image")

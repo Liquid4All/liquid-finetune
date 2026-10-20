@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Sequence
 from typing import Any
 
 import torch
@@ -9,6 +10,15 @@ from leap_finetune.data_loading.image_loader import load_image
 
 
 def _messages(item: dict[str, Any]) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    instruction = item.get("instruction")
+    if instruction:
+        messages.append(
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": instruction}],
+            }
+        )
     content: list[dict[str, Any]] = []
     image = item.get("image")
     if image is not None:
@@ -16,13 +26,8 @@ def _messages(item: dict[str, Any]) -> list[dict[str, Any]]:
     text = item.get("text")
     if text is not None:
         content.append({"type": "text", "text": text})
-    return [
-        {
-            "role": "system",
-            "content": [{"type": "text", "text": item["instruction"]}],
-        },
-        {"role": "user", "content": content},
-    ]
+    messages.append({"role": "user", "content": content})
+    return messages
 
 
 def create_vlm_embedding_collate_fn(processor):
@@ -70,34 +75,76 @@ def create_vlm_embedding_collate_fn(processor):
 def build_candidate_mask(samples: list[dict[str, Any]]) -> torch.Tensor:
     """Select semantically valid positives and negatives for each query.
 
-    Retrieval rows use in-batch candidates from the same modality group while
-    closed-set and QA rows use only their explicit positive/negative pair.
-    Duplicate positives are masked rather than treated as false negatives.
+    Retrieval rows use in-batch candidates from the same candidate group.
+    Fixed-ontology classification rows use all label candidates from the same
+    ontology. Multiple-choice rows use only their explicit choices. Duplicate
+    positives are masked rather than treated as false negatives.
     """
 
     size = len(samples)
-    mask = torch.zeros((size, 2 * size), dtype=torch.bool)
+    group_tokens: list[str | None] = []
+    positive_keys: list[str] = []
+    negative_keys: list[str] = []
     for query_index, sample in enumerate(samples):
-        mask[query_index, query_index] = True
-        mask[query_index, size + query_index] = True
-        if sample.get("loss_kind", "retrieval") != "retrieval":
+        loss_kind = sample.get("loss_kind", "retrieval")
+        if loss_kind == "multiple_choice":
+            group_tokens.append(None)
+            positive_keys.append(
+                str(sample.get("positive_key", f"positive:{query_index}"))
+            )
+            negative_keys.append(
+                str(sample.get("negative_key", f"negative:{query_index}"))
+            )
             continue
-        group = sample.get("loss_group", "all")
-        positive_key = sample.get("positive_key", f"positive:{query_index}")
-        for candidate_index, candidate in enumerate(samples):
-            if candidate.get("loss_group", "all") != group:
-                continue
-            candidate_positive = candidate.get(
-                "positive_key", f"positive:{candidate_index}"
-            )
-            candidate_negative = candidate.get(
-                "negative_key", f"negative:{candidate_index}"
-            )
-            if candidate_index == query_index or candidate_positive != positive_key:
-                mask[query_index, candidate_index] = True
-            if candidate_negative != positive_key:
-                mask[query_index, size + candidate_index] = True
+        if loss_kind == "classification":
+            group_field = "candidate_set_id"
+        elif loss_kind == "retrieval":
+            group_field = "candidate_group"
+        else:
+            raise ValueError(f"unsupported loss_kind: {loss_kind!r}")
+        group = sample.get(group_field)
+        if not group:
+            raise ValueError(f"{loss_kind} rows require {group_field}")
+        group_tokens.append(f"{loss_kind}:{group}")
+        positive_keys.append(str(sample.get("positive_key", f"positive:{query_index}")))
+        negative_keys.append(str(sample.get("negative_key", f"negative:{query_index}")))
+
+    def integer_ids(values: Sequence[str | None]) -> torch.Tensor:
+        lookup: dict[str | None, int] = {}
+        return torch.tensor(
+            [lookup.setdefault(value, len(lookup)) for value in values],
+            dtype=torch.int64,
+        )
+
+    group_ids = integer_ids(group_tokens)
+    positive_ids = integer_ids(positive_keys)
+    negative_ids = integer_ids(negative_keys)
+    same_group = group_ids[:, None].eq(group_ids[None, :])
+    explicit = torch.tensor([value is None for value in group_tokens], dtype=torch.bool)
+    same_group &= ~explicit[:, None]
+    identity = torch.eye(size, dtype=torch.bool)
+    positive_mask = same_group & (
+        ~positive_ids[:, None].eq(positive_ids[None, :]) | identity
+    )
+    negative_mask = same_group & ~positive_ids[:, None].eq(negative_ids[None, :])
+    positive_mask |= identity
+    negative_mask |= identity
+    mask = torch.cat((positive_mask, negative_mask), dim=1)
     return mask
 
 
-__all__ = ["build_candidate_mask", "create_vlm_embedding_collate_fn"]
+def collate_raw_vlm_embedding_samples(
+    samples: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Keep a logical batch raw so cached loss can tokenize bounded chunks."""
+
+    if not samples:
+        raise ValueError("cannot collate an empty VLM embedding batch")
+    return {"samples": samples}
+
+
+__all__ = [
+    "build_candidate_mask",
+    "collate_raw_vlm_embedding_samples",
+    "create_vlm_embedding_collate_fn",
+]

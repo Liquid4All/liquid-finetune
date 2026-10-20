@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any, cast
 
 import torch
@@ -11,6 +12,8 @@ from transformers import PreTrainedModel, ProcessorMixin, Trainer, TrainingArgum
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
 from leap_finetune.checkpointing.model_loading import load_vlm_model
 from leap_finetune.data_loading.vlm_embedding import (
+    build_candidate_mask,
+    collate_raw_vlm_embedding_samples,
     create_vlm_embedding_collate_fn,
 )
 from leap_finetune.training.default_configs.vlm_sft_configs import (
@@ -34,11 +37,13 @@ logger = logging.getLogger(__name__)
 
 _RUNTIME_KEYS = {
     "adapter_path",
+    "cached_loss",
     "do_image_splitting",
     "gradient_checkpointing_scope",
     "leap_run_name_template",
     "loss",
     "max_image_tokens",
+    "micro_batch_size",
     "min_image_tokens",
     "temperature",
 }
@@ -184,6 +189,131 @@ class LFMVLMEmbeddingTrainer(RayDataLoaderMixin, Trainer):
         return (loss, embeddings) if return_outputs else loss
 
 
+@dataclass(frozen=True, slots=True)
+class _RngState:
+    cpu: torch.Tensor
+    accelerator: torch.Tensor | None
+
+
+def _capture_rng_state() -> _RngState:
+    return _RngState(
+        cpu=torch.get_rng_state(),
+        accelerator=torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
+    )
+
+
+def _restore_rng_state(state: _RngState) -> None:
+    torch.set_rng_state(state.cpu)
+    if state.accelerator is not None:
+        torch.cuda.set_rng_state(state.accelerator)
+
+
+class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
+    """Exact logical-batch InfoNCE with memory-bounded gradient replay."""
+
+    def __init__(
+        self,
+        *,
+        processor: Any,
+        micro_batch_size: int,
+        **kwargs: Any,
+    ) -> None:
+        if micro_batch_size <= 0:
+            raise ValueError("micro_batch_size must be positive")
+        super().__init__(**kwargs)
+        self.micro_batch_size = micro_batch_size
+        self._micro_collator = create_vlm_embedding_collate_fn(processor)
+
+    def _chunks(self, samples: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+        return [
+            samples[start : start + self.micro_batch_size]
+            for start in range(0, len(samples), self.micro_batch_size)
+        ]
+
+    def _encode_chunk(
+        self,
+        model: nn.Module,
+        samples: list[dict[str, Any]],
+    ) -> dict[str, torch.Tensor]:
+        batch = self._prepare_inputs(self._micro_collator(samples))
+        return {
+            role: self._encode(
+                model,
+                cast(dict[str, torch.Tensor], batch[role]),
+            )
+            for role in ("query", "positive", "negative")
+        }
+
+    def training_step(
+        self,
+        model: nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
+        num_items_in_batch: torch.Tensor | int | None = None,
+    ) -> torch.Tensor:
+        """Cache embeddings, differentiate the full loss, then replay chunks."""
+
+        del num_items_in_batch
+        model.train()
+        if hasattr(self.optimizer, "train") and callable(self.optimizer.train):
+            self.optimizer.train()
+        samples = cast(list[dict[str, Any]], inputs.get("samples"))
+        if not samples:
+            raise ValueError("cached VLM embedding training needs raw samples")
+
+        chunks = self._chunks(samples)
+        rng_states: list[_RngState] = []
+        cached_by_role: dict[str, list[torch.Tensor]] = {
+            "query": [],
+            "positive": [],
+            "negative": [],
+        }
+        with torch.no_grad():
+            for chunk in chunks:
+                rng_states.append(_capture_rng_state())
+                with self.compute_loss_context_manager():
+                    embeddings = self._encode_chunk(model, chunk)
+                for role, value in embeddings.items():
+                    cached_by_role[role].append(value.detach())
+
+        cached = {
+            role: torch.cat(values, dim=0).requires_grad_()
+            for role, values in cached_by_role.items()
+        }
+        candidate_mask = build_candidate_mask(samples)
+        loss = contrastive_embedding_loss(
+            cached["query"],
+            cached["positive"],
+            cached["negative"],
+            temperature=self.embedding_temperature,
+            candidate_mask=candidate_mask,
+        )
+        loss.backward()
+        embedding_gradients = {
+            role: cast(torch.Tensor, value.grad).detach()
+            for role, value in cached.items()
+        }
+
+        offset = 0
+        for chunk, rng_state in zip(chunks, rng_states, strict=True):
+            _restore_rng_state(rng_state)
+            with self.compute_loss_context_manager():
+                embeddings = self._encode_chunk(model, chunk)
+                end = offset + len(chunk)
+                surrogate = sum(
+                    (
+                        embeddings[role]
+                        * embedding_gradients[role][offset:end].to(
+                            embeddings[role].device
+                        )
+                    ).sum()
+                    for role in ("query", "positive", "negative")
+                )
+            self.accelerator.backward(surrogate)
+            offset = end
+
+        return loss.detach()
+
+
 def vlm_embedding_run(
     training_config: dict,
     train_dataset=None,
@@ -202,6 +332,8 @@ def vlm_embedding_run(
     resume_from = train_config.get("resume_from_checkpoint")
     adapter_path = train_config.get("adapter_path")
     temperature = float(train_config.get("temperature", 0.02))
+    cached_loss = bool(train_config.get("cached_loss", False))
+    micro_batch_size = int(train_config.get("micro_batch_size", 32))
     checkpointing_scope = train_config.get("gradient_checkpointing_scope", "auto")
 
     filtered, _ = filter_runtime_config_kwargs(
@@ -243,14 +375,28 @@ def vlm_embedding_run(
         trainable_model = apply_peft_to_model(trainable_model, peft_config)
     configure_gradient_checkpointing(trainable_model, checkpointing_scope)
 
-    trainer = LFMVLMEmbeddingTrainer(
+    trainer_class = (
+        CachedLFMVLMEmbeddingTrainer if cached_loss else LFMVLMEmbeddingTrainer
+    )
+    trainer_kwargs: dict[str, Any] = {}
+    if cached_loss:
+        if args.gradient_accumulation_steps != 1:
+            raise ValueError("cached loss requires gradient_accumulation_steps=1")
+        trainer_kwargs.update(
+            processor=processor,
+            micro_batch_size=micro_batch_size,
+            data_collator=collate_raw_vlm_embedding_samples,
+        )
+    else:
+        trainer_kwargs["data_collator"] = create_vlm_embedding_collate_fn(processor)
+    trainer = trainer_class(
         temperature=temperature,
         model=trainable_model,
         processing_class=processor,
         args=args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        data_collator=create_vlm_embedding_collate_fn(processor),
+        **trainer_kwargs,
     )
     trainer.add_callback(
         LeapCheckpointCallback(
@@ -272,6 +418,7 @@ def vlm_embedding_run(
 
 __all__ = [
     "LFMVLMEmbeddingTrainer",
+    "CachedLFMVLMEmbeddingTrainer",
     "configure_gradient_checkpointing",
     "contrastive_embedding_loss",
     "pool_last_attended_token",

@@ -6,18 +6,20 @@ DATASET=""
 OUTPUT=""
 RUN_NAME=""
 LEARNING_RATE="1e-4"
-BATCH_SIZE="32"
+BATCH_SIZE="8192"
+MICRO_BATCH_SIZE="32"
+CACHED_LOSS="true"
 GRADIENT_ACCUMULATION_STEPS="1"
 GRADIENT_CHECKPOINTING="false"
 GRADIENT_CHECKPOINTING_SCOPE="auto"
-MAX_STEPS="3000"
+MAX_STEPS="80"
 TEMPERATURE="0.02"
 MAX_IMAGE_TOKENS="256"
 LORA_RANK="64"
 LORA_ALPHA="64"
 WARMUP_RATIO="0.05"
 WEIGHT_DECAY="0.01"
-SAVE_STEPS="500"
+SAVE_STEPS="10"
 TRACKER="wandb"
 SEED="20261019"
 
@@ -29,6 +31,8 @@ while (($#)); do
     --run-name) RUN_NAME="$2"; shift 2 ;;
     --learning-rate) LEARNING_RATE="$2"; shift 2 ;;
     --batch-size) BATCH_SIZE="$2"; shift 2 ;;
+    --micro-batch-size) MICRO_BATCH_SIZE="$2"; shift 2 ;;
+    --cached-loss) CACHED_LOSS="$2"; shift 2 ;;
     --gradient-accumulation-steps) GRADIENT_ACCUMULATION_STEPS="$2"; shift 2 ;;
     --gradient-checkpointing) GRADIENT_CHECKPOINTING="$2"; shift 2 ;;
     --gradient-checkpointing-scope) GRADIENT_CHECKPOINTING_SCOPE="$2"; shift 2 ;;
@@ -49,6 +53,10 @@ done
 case "${GRADIENT_CHECKPOINTING}" in
   true|false) ;;
   *) echo "gradient-checkpointing must be true or false" >&2; exit 2 ;;
+esac
+case "${CACHED_LOSS}" in
+  true|false) ;;
+  *) echo "cached-loss must be true or false" >&2; exit 2 ;;
 esac
 case "${GRADIENT_CHECKPOINTING_SCOPE}" in
   auto|all|language|vision|none) ;;
@@ -106,6 +114,8 @@ training_config:
   max_steps: ${MAX_STEPS}
   per_device_train_batch_size: ${BATCH_SIZE}
   per_device_eval_batch_size: ${BATCH_SIZE}
+  micro_batch_size: ${MICRO_BATCH_SIZE}
+  cached_loss: ${CACHED_LOSS}
   gradient_accumulation_steps: ${GRADIENT_ACCUMULATION_STEPS}
   gradient_checkpointing: ${GRADIENT_CHECKPOINTING}
   gradient_checkpointing_scope: "${GRADIENT_CHECKPOINTING_SCOPE}"
@@ -118,6 +128,7 @@ training_config:
   max_image_tokens: ${MAX_IMAGE_TOKENS}
   eval_strategy: "no"
   eval_on_start: false
+  dataloader_drop_last: false
   save_strategy: "steps"
   save_steps: ${SAVE_STEPS}
   save_total_limit: 2
