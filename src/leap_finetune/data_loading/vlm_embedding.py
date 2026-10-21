@@ -87,6 +87,8 @@ def build_candidate_mask(samples: list[dict[str, Any]]) -> torch.Tensor:
     negative_keys: list[str] = []
     for query_index, sample in enumerate(samples):
         loss_kind = sample.get("loss_kind", "retrieval")
+        if loss_kind == "explicit":
+            loss_kind = "multiple_choice"
         if loss_kind == "multiple_choice":
             group_tokens.append(None)
             positive_keys.append(
@@ -103,6 +105,8 @@ def build_candidate_mask(samples: list[dict[str, Any]]) -> torch.Tensor:
         else:
             raise ValueError(f"unsupported loss_kind: {loss_kind!r}")
         group = sample.get(group_field)
+        if loss_kind == "retrieval" and not group:
+            group = sample.get("loss_group") or sample.get("modality") or "legacy"
         if not group:
             raise ValueError(f"{loss_kind} rows require {group_field}")
         group_tokens.append(f"{loss_kind}:{group}")
@@ -117,8 +121,9 @@ def build_candidate_mask(samples: list[dict[str, Any]]) -> torch.Tensor:
         )
 
     group_ids = integer_ids(group_tokens)
-    positive_ids = integer_ids(positive_keys)
-    negative_ids = integer_ids(negative_keys)
+    candidate_ids = integer_ids([*positive_keys, *negative_keys])
+    positive_ids = candidate_ids[:size]
+    negative_ids = candidate_ids[size:]
     same_group = group_ids[:, None].eq(group_ids[None, :])
     explicit = torch.tensor([value is None for value in group_tokens], dtype=torch.bool)
     same_group &= ~explicit[:, None]

@@ -78,8 +78,8 @@ def test_candidate_mask_uses_task_semantics_and_masks_duplicate_positives():
     mask = build_candidate_mask(samples)
 
     assert mask.tolist() == [
-        [True, False, True, True, True, True],
-        [False, True, True, True, True, True],
+        [True, False, False, True, True, False],
+        [False, True, False, True, True, False],
         [False, False, True, False, False, True],
     ]
 
@@ -112,6 +112,22 @@ def test_candidate_mask_shares_only_one_class_ontology():
         [True, True, False, True, True, False],
         [True, True, False, False, True, False],
         [False, False, True, False, False, True],
+    ]
+
+
+def test_candidate_mask_maps_legacy_objective_fields():
+    samples = [
+        {"loss_kind": "explicit", "modality": "image"},
+        {"loss_kind": "retrieval", "loss_group": "text"},
+        {"modality": "text"},
+    ]
+
+    mask = build_candidate_mask(samples)
+
+    assert mask.tolist() == [
+        [True, False, False, True, False, False],
+        [False, True, True, False, True, True],
+        [False, True, True, False, True, True],
     ]
 
 
