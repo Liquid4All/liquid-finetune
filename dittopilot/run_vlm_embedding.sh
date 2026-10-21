@@ -177,11 +177,15 @@ fi
 
 # Ray's AF_UNIX socket paths must stay under 107 bytes; the per-job TMPDIR
 # (which embeds the user name and job id twice) exceeds that on this cluster.
-if [[ -z "${RAY_TMPDIR:-}" ]]; then
-  export RAY_TMPDIR="/tmp/ray-${SLURM_JOB_ID:-$$}"
-  mkdir -p "${RAY_TMPDIR}"
-  trap 'rm -rf -- "${RAY_TMPDIR}"' EXIT
-fi
+# Job-local scratch: Ray socket paths must stay under the AF_UNIX limit, and
+# MIOpen's per-user kernel database in $HOME races across concurrent jobs.
+JOB_SCRATCH="/tmp/vlm-${SLURM_JOB_ID:-$$}"
+mkdir -p "${JOB_SCRATCH}"
+trap 'rm -rf -- "${JOB_SCRATCH}"' EXIT
+export RAY_TMPDIR="${RAY_TMPDIR:-${JOB_SCRATCH}/ray}"
+export MIOPEN_USER_DB_PATH="${MIOPEN_USER_DB_PATH:-${JOB_SCRATCH}/miopen}"
+export MIOPEN_CUSTOM_CACHE_DIR="${MIOPEN_CUSTOM_CACHE_DIR:-${JOB_SCRATCH}/miopen}"
+mkdir -p "${RAY_TMPDIR}" "${MIOPEN_USER_DB_PATH}" "${MIOPEN_CUSTOM_CACHE_DIR}"
 
 UV_PROJECT_ARGS=()
 if [[ "${DITTOPILOT_CLUSTER:-local}" == "amd" ]]; then
