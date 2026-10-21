@@ -179,6 +179,7 @@ def test_cached_contrastive_replay_matches_full_batch_gradient():
     trainer = object.__new__(CachedLFMVLMEmbeddingTrainer)
     trainer.micro_batch_size = 2
     trainer.sort_rows = False
+    trainer.retain_graphs = False
     trainer.embedding_temperature = 0.2
     trainer.optimizer = SimpleNamespace(train=lambda: None)
     trainer.accelerator = SimpleNamespace(backward=lambda value: value.backward())
@@ -554,6 +555,7 @@ def _toy_cached_trainer(micro_batch_size: int) -> CachedLFMVLMEmbeddingTrainer:
     trainer = object.__new__(CachedLFMVLMEmbeddingTrainer)
     trainer.micro_batch_size = micro_batch_size
     trainer.sort_rows = False
+    trainer.retain_graphs = False
     trainer.embedding_temperature = 0.2
     trainer.optimizer = SimpleNamespace(train=lambda: None)
     trainer.accelerator = SimpleNamespace(backward=lambda value: value.backward())
@@ -578,7 +580,7 @@ def _toy_cached_trainer(micro_batch_size: int) -> CachedLFMVLMEmbeddingTrainer:
 
 
 def _distributed_step_worker(
-    rank, world, init_file, bounds, state, queue, micro_batch_size
+    rank, world, init_file, bounds, state, queue, micro_batch_size, retain_graphs
 ):
     import torch.distributed as dist
 
@@ -590,15 +592,18 @@ def _distributed_step_worker(
         model.load_state_dict(state)
         start, end = bounds[rank]
         trainer = _toy_cached_trainer(micro_batch_size=micro_batch_size)
+        trainer.retain_graphs = retain_graphs
         loss = trainer.training_step(model, {"samples": _toy_samples(5)[start:end]})
         queue.put((rank, loss.item(), model.weight.grad.tolist()))
     finally:
         dist.destroy_process_group()
 
 
-@pytest.mark.parametrize("micro_batch_size", [2, 3])
+@pytest.mark.parametrize(
+    ("micro_batch_size", "retain_graphs"), [(2, False), (3, False), (1, True)]
+)
 def test_distributed_cached_step_matches_single_process_full_batch(
-    tmp_path, micro_batch_size
+    tmp_path, micro_batch_size, retain_graphs
 ):
     import multiprocessing
 
@@ -623,6 +628,7 @@ def test_distributed_cached_step_matches_single_process_full_batch(
                 state,
                 queue,
                 micro_batch_size,
+                retain_graphs,
             ),
         )
         for rank in range(2)
@@ -639,20 +645,25 @@ def test_distributed_cached_step_matches_single_process_full_batch(
         torch.testing.assert_close(torch.tensor(grad), reference.weight.grad)
 
 
-def _toy_step(micro_batch_size: int, samples: list[dict]) -> tuple[float, list]:
+def _toy_step(
+    micro_batch_size: int, samples: list[dict], *, retain_graphs: bool = False
+) -> tuple[float, list]:
     model = torch.nn.Linear(3, 2, bias=False)
     torch.nn.init.constant_(model.weight, 0.3)
     model.weight.data[0, 1] = -0.7
-    loss = _toy_cached_trainer(micro_batch_size).training_step(
-        model, {"samples": samples}
-    )
+    trainer = _toy_cached_trainer(micro_batch_size)
+    trainer.retain_graphs = retain_graphs
+    loss = trainer.training_step(model, {"samples": samples})
     return loss.item(), model.weight.grad.tolist()
 
 
-def test_single_pass_step_matches_cached_replay():
+@pytest.mark.parametrize(
+    ("micro_batch_size", "retain_graphs"), [(5, False), (2, True), (1, True)]
+)
+def test_single_pass_step_matches_cached_replay(micro_batch_size, retain_graphs):
     samples = _toy_samples(5)
     cached = _toy_step(2, samples)
-    single = _toy_step(5, samples)
+    single = _toy_step(micro_batch_size, samples, retain_graphs=retain_graphs)
     torch.testing.assert_close(torch.tensor(single[0]), torch.tensor(cached[0]))
     torch.testing.assert_close(torch.tensor(single[1]), torch.tensor(cached[1]))
 

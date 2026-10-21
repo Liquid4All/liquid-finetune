@@ -4,7 +4,7 @@ import json
 import logging
 import math
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -54,6 +54,7 @@ _RUNTIME_KEYS = {
     "max_image_tokens",
     "micro_batch_size",
     "min_image_tokens",
+    "retain_graphs",
     "sort_rows",
     "temperature",
 }
@@ -322,6 +323,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         micro_batch_size: int,
         collate_workers: int = 0,
         sort_rows: bool = True,
+        retain_graphs: bool = False,
         **kwargs: Any,
     ) -> None:
         if micro_batch_size <= 0:
@@ -329,6 +331,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         super().__init__(**kwargs)
         self.micro_batch_size = micro_batch_size
         self.sort_rows = sort_rows
+        self.retain_graphs = retain_graphs
         self._chunk_collator = OrderedChunkCollator(processor, workers=collate_workers)
         self._last_step_metrics: dict[str, float] = {}
 
@@ -374,8 +377,9 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         Under data parallelism each rank encodes its share of the logical
         batch, all ranks compute the identical loss over the gathered global
         batch, each replays its own rows, and LoRA gradients are summed once.
-        When the rank's rows fit in one micro-batch the cache pass is skipped
-        and the loss backpropagates through a single encoding. Rows are
+        When the rank's rows fit in one micro-batch, or ``retain_graphs`` keeps
+        every chunk's autograd graph, the cache pass is skipped and the loss
+        backpropagates through a single encoding of each chunk. Rows are
         optionally sorted by modality and text length first; the loss is
         permutation-equivariant, so this only reduces padding.
         """
@@ -408,13 +412,13 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             collate_wait += time.perf_counter() - waited
             return batch
 
-        if len(chunks) == 1:
+        if len(chunks) == 1 or self.retain_graphs:
             return self._single_pass_step(
                 model,
                 samples,
-                next_batch(),
+                (next_batch() for _ in chunks),
                 started=started,
-                collate_wait=collate_wait,
+                collate_wait=lambda: collate_wait,
                 distributed=distributed,
             )
 
@@ -494,15 +498,20 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         self,
         model: nn.Module,
         samples: list[dict[str, Any]],
-        batch: dict[str, Any],
+        batches: Iterable[dict[str, Any]],
         *,
         started: float,
-        collate_wait: float,
+        collate_wait: Callable[[], float],
         distributed: bool,
     ) -> torch.Tensor:
-        with self.compute_loss_context_manager():
-            embeddings = self._encode_chunk(model, batch)
-        local = torch.stack([embeddings[role] for role in _EMBEDDING_ROLES], dim=1)
+        encoded: list[torch.Tensor] = []
+        for batch in batches:
+            with self.compute_loss_context_manager():
+                embeddings = self._encode_chunk(model, batch)
+            encoded.append(
+                torch.stack([embeddings[role] for role in _EMBEDDING_ROLES], dim=1)
+            )
+        local = torch.cat(encoded)
         if distributed:
             global_rows, offset = gather_rank_rows(local.detach())
             global_rows = torch.cat(
@@ -528,7 +537,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             loss,
             started=started,
             cache_seconds=0.0,
-            collate_wait=collate_wait,
+            collate_wait=collate_wait(),
             rows=len(samples),
             distributed=distributed,
         )
@@ -700,6 +709,7 @@ def vlm_embedding_run(
             micro_batch_size=micro_batch_size,
             collate_workers=collate_workers,
             sort_rows=bool(train_config.get("sort_rows", True)),
+            retain_graphs=bool(train_config.get("retain_graphs", False)),
             data_collator=collate_raw_vlm_embedding_samples,
         )
     else:
