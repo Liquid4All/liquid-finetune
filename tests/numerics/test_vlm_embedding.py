@@ -244,6 +244,7 @@ def test_dittopilot_vlm_embedding_exposes_memory_and_tracking_controls():
     assert "micro_batch_size: ${MICRO_BATCH_SIZE}" in runner
     assert "cached_loss: ${CACHED_LOSS}" in runner
     assert "collate_workers: ${COLLATE_WORKERS}" in runner
+    assert 'RAY_TMPDIR="/tmp/ray-${SLURM_JOB_ID:-$$}"' in runner
     assert 'WANDB_MODE="${WANDB_MODE:-online}"' in runner
     assert 'WANDB_PROJECT="${WANDB_PROJECT:-retrieval-lfm}"' in runner
 

@@ -161,6 +161,14 @@ if [[ "${TRACKER}" == "wandb" ]]; then
   mkdir -p "${WANDB_DIR}"
 fi
 
+# Ray's AF_UNIX socket paths must stay under 107 bytes; the per-job TMPDIR
+# (which embeds the user name and job id twice) exceeds that on this cluster.
+if [[ -z "${RAY_TMPDIR:-}" ]]; then
+  export RAY_TMPDIR="/tmp/ray-${SLURM_JOB_ID:-$$}"
+  mkdir -p "${RAY_TMPDIR}"
+  trap 'rm -rf -- "${RAY_TMPDIR}"' EXIT
+fi
+
 UV_PROJECT_ARGS=()
 if [[ "${DITTOPILOT_CLUSTER:-local}" == "amd" ]]; then
   UV_PROJECT_ARGS=(--project envs/rocm)
