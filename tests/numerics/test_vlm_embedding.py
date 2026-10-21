@@ -251,6 +251,7 @@ def test_dittopilot_vlm_embedding_exposes_memory_and_tracking_controls():
     assert "cached_loss: ${CACHED_LOSS}" in runner
     assert "collate_workers: ${COLLATE_WORKERS}" in runner
     assert 'JOB_SCRATCH="/tmp/vlm-${SLURM_JOB_ID:-$$}"' in runner
+    assert 'eval_strategy: "no"' in runner
     assert 'RAY_TMPDIR="${RAY_TMPDIR:-${JOB_SCRATCH}/ray}"' in runner
     assert (
         'MIOPEN_USER_DB_PATH="${MIOPEN_USER_DB_PATH:-${JOB_SCRATCH}/miopen}"' in runner

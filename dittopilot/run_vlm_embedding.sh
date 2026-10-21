@@ -129,6 +129,9 @@ dataset:
   type: "vlm_embedding"
 training_config:
   extends: "DEFAULT_VLM_EMBEDDING"
+  # No in-run eval: otherwise the parser holds out 20% of the training file,
+  # and every Ray worker re-executes the full read/shuffle to build that split.
+  eval_strategy: "no"
   max_steps: ${MAX_STEPS}
   global_batch_size: ${BATCH_SIZE}
   per_device_train_batch_size: ${BATCH_SIZE}
