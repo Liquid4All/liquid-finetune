@@ -32,7 +32,17 @@ def _load_referenced_image(reference: dict[str, Any]) -> Any:
 
 def _messages(item: dict[str, Any]) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
-    instruction = item.get("instruction")
+    variants = item.pop("instruction_variants", None)
+    if variants:
+        if not isinstance(variants, list) or not all(
+            isinstance(value, str) and value for value in variants
+        ):
+            raise ValueError("instruction_variants must be non-empty strings")
+        instruction = variants[
+            int(torch.randint(len(variants), size=(), device="cpu").item())
+        ]
+    else:
+        instruction = item.get("instruction")
     if instruction:
         messages.append(
             {

@@ -333,6 +333,23 @@ def test_vlm_embedding_collator_omits_empty_candidate_system_prompt():
     assert [message["role"] for message in positive_messages] == ["user"]
 
 
+def test_vlm_embedding_collator_samples_instruction_variants():
+    processor = _FakeProcessor()
+    collator = create_vlm_embedding_collate_fn(processor)
+    query = {
+        "instruction": "fallback",
+        "instruction_variants": ["first", "second"],
+        "text": "query",
+    }
+    label = {"instruction": "", "text": "class label"}
+    torch.manual_seed(7)
+
+    collator([{"query": query, "positive": label, "negative": label}])
+
+    system = processor.calls[0][0][0][0]
+    assert system["content"][0]["text"] in {"first", "second"}
+
+
 def test_vlm_embedding_collator_resolves_shared_dataset_image_refs(
     tmp_path, monkeypatch
 ):
