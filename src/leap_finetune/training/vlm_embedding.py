@@ -332,6 +332,8 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         self.micro_batch_size = micro_batch_size
         self.sort_rows = sort_rows
         self.retain_graphs = retain_graphs
+        self._lookahead: dict[str, Any] | None = None
+        self._plans: dict[int, _StepPlan] = {}
         self._chunk_collator = OrderedChunkCollator(processor, workers=collate_workers)
         self._last_step_metrics: dict[str, float] = {}
 
@@ -345,6 +347,46 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         if "loss" in logs and self._last_step_metrics:
             logs = {**logs, **self._last_step_metrics}
         super().log(logs, *args, **kwargs)
+
+    def get_batch_samples(
+        self, epoch_iterator: Iterator, num_batches: int, device: torch.device
+    ) -> tuple[list, torch.Tensor | int | None]:
+        """Fetch one batch beyond the current step and start collating it."""
+
+        del device
+        batches: list[dict[str, Any]] = []
+        while len(batches) < num_batches:
+            if self._lookahead is not None:
+                batches.append(self._lookahead)
+                self._lookahead = None
+                continue
+            try:
+                batches.append(next(epoch_iterator))
+            except StopIteration:
+                break
+        try:
+            self._lookahead = next(epoch_iterator)
+        except StopIteration:
+            self._lookahead = None
+        plans: dict[int, _StepPlan] = {}
+        upcoming = [*batches, *([self._lookahead] if self._lookahead else [])]
+        for batch in upcoming:
+            samples = batch.get("samples")
+            if samples:
+                plans[id(batch)] = self._plans.get(id(batch)) or self._plan(samples)
+        self._plans = plans
+        return batches, None
+
+    def _plan(self, samples: list[dict[str, Any]]) -> _StepPlan:
+        if self.sort_rows:
+            samples = sorted(samples, key=row_length_key)
+        chunks = self._chunks(samples)
+        seeds = torch.randint(0, 2**62, (len(chunks),)).tolist()
+        return _StepPlan(
+            samples=samples,
+            chunks=chunks,
+            collated=self._chunk_collator.submit(zip(chunks, seeds, strict=True)),
+        )
 
     def _chunks(self, samples: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         return [
@@ -393,16 +435,12 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         samples = cast(list[dict[str, Any]], inputs.get("samples"))
         if not samples:
             raise ValueError("cached VLM embedding training needs raw samples")
-        if self.sort_rows:
-            samples = sorted(samples, key=row_length_key)
 
         started = time.perf_counter()
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
-        chunks = self._chunks(samples)
-        chunk_seeds = torch.randint(0, 2**62, (len(chunks),)).tolist()
-        jobs = list(zip(chunks, chunk_seeds, strict=True))
-        collated: Iterator[dict[str, Any]] = self._chunk_collator.iterate(jobs)
+        plan = self._plans.pop(id(inputs), None) or self._plan(samples)
+        samples, chunks, collated = plan.samples, plan.chunks, plan.collated
         collate_wait = 0.0
 
         def next_batch() -> dict[str, Any]:
@@ -572,6 +610,13 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
                 json.dumps({"vlm_embedding_step": self._last_step_metrics}), flush=True
             )
         return loss.detach()
+
+
+@dataclass(frozen=True)
+class _StepPlan:
+    samples: list[dict[str, Any]]
+    chunks: list[list[dict[str, Any]]]
+    collated: Iterator[dict[str, Any]]
 
 
 def row_length_key(sample: dict[str, Any]) -> tuple[tuple[bool, ...], int]:

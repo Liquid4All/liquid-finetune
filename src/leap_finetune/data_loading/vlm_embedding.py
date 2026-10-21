@@ -319,6 +319,20 @@ class OrderedChunkCollator:
             for future in pending:
                 future.cancel()
 
+    def submit(self, jobs: Iterable[CollateJob]) -> Iterator[dict[str, Any]]:
+        """Start collating every job now and return results in order.
+
+        Unlike ``iterate``, work begins before the first result is requested,
+        so a caller can queue the next step's chunks while the current step
+        runs on the accelerator.
+        """
+
+        if self.workers == 0:
+            return (self._inline(samples, seed=seed) for samples, seed in jobs)
+        pool = self._pool()
+        futures = [pool.submit(self._task, samples, seed) for samples, seed in jobs]
+        return (future.result() for future in futures)
+
     def close(self) -> None:
         if self._executor is not None:
             self._executor.shutdown(wait=True, cancel_futures=True)
