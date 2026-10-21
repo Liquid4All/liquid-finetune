@@ -10,6 +10,7 @@ BATCH_SIZE="8192"
 MICRO_BATCH_SIZE="32"
 COLLATE_WORKERS="0"
 CACHED_LOSS="true"
+SORT_ROWS="true"
 GRADIENT_ACCUMULATION_STEPS="1"
 GRADIENT_CHECKPOINTING="false"
 GRADIENT_CHECKPOINTING_SCOPE="auto"
@@ -35,6 +36,7 @@ while (($#)); do
     --micro-batch-size) MICRO_BATCH_SIZE="$2"; shift 2 ;;
     --collate-workers) COLLATE_WORKERS="$2"; shift 2 ;;
     --cached-loss) CACHED_LOSS="$2"; shift 2 ;;
+    --sort-rows) SORT_ROWS="$2"; shift 2 ;;
     --gradient-accumulation-steps) GRADIENT_ACCUMULATION_STEPS="$2"; shift 2 ;;
     --gradient-checkpointing) GRADIENT_CHECKPOINTING="$2"; shift 2 ;;
     --gradient-checkpointing-scope) GRADIENT_CHECKPOINTING_SCOPE="$2"; shift 2 ;;
@@ -63,6 +65,10 @@ fi
 case "${CACHED_LOSS}" in
   true|false) ;;
   *) echo "cached-loss must be true or false" >&2; exit 2 ;;
+esac
+case "${SORT_ROWS}" in
+  true|false) ;;
+  *) echo "sort-rows must be true or false" >&2; exit 2 ;;
 esac
 case "${GRADIENT_CHECKPOINTING_SCOPE}" in
   auto|all|language|vision|none) ;;
@@ -124,6 +130,7 @@ training_config:
   micro_batch_size: ${MICRO_BATCH_SIZE}
   collate_workers: ${COLLATE_WORKERS}
   cached_loss: ${CACHED_LOSS}
+  sort_rows: ${SORT_ROWS}
   gradient_accumulation_steps: ${GRADIENT_ACCUMULATION_STEPS}
   gradient_checkpointing: ${GRADIENT_CHECKPOINTING}
   gradient_checkpointing_scope: "${GRADIENT_CHECKPOINTING_SCOPE}"

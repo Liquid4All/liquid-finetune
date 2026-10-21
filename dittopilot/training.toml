@@ -2,7 +2,7 @@
 description = "Native-dimension assistant-prefix contrastive adaptation for generative vision-language checkpoints."
 mode = "adapter"
 modality = "image"
-command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --micro-batch-size {{micro_batch_size}} --collate-workers {{collate_workers}} --cached-loss {{cached_loss}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --gradient-checkpointing {{gradient_checkpointing}} --gradient-checkpointing-scope {{gradient_checkpointing_scope}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --tracker {{tracker}} --seed {{seed}}"
+command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --micro-batch-size {{micro_batch_size}} --collate-workers {{collate_workers}} --cached-loss {{cached_loss}} --sort-rows {{sort_rows}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --gradient-checkpointing {{gradient_checkpointing}} --gradient-checkpointing-scope {{gradient_checkpointing_scope}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --tracker {{tracker}} --seed {{seed}}"
 gpus = 1
 cpus = 32
 nodes = 1
@@ -25,7 +25,7 @@ description = "Global logical contrastive batch size used by one exact InfoNCE s
 [vlm_embedding.args.micro_batch_size]
 type = "int"
 default = 32
-description = "Maximum number of rows encoded at once during cached gradient replay."
+description = "Maximum number of rows encoded at once during cached gradient replay; when it covers the per-device batch the cache pass is skipped."
 
 [vlm_embedding.args.collate_workers]
 type = "int"
@@ -36,6 +36,11 @@ description = "Worker processes that load images and build micro-batches ahead o
 type = "str"
 default = "true"
 description = "Use exact two-pass cached contrastive loss; true or false."
+
+[vlm_embedding.args.sort_rows]
+type = "str"
+default = "true"
+description = "Sort each rank's rows by image roles and text length before chunking to reduce padding; exact for the in-batch loss. true or false."
 
 [vlm_embedding.args.gradient_accumulation_steps]
 type = "int"

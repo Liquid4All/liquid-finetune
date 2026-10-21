@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import itertools
 import json
 import logging
 import math
@@ -55,6 +54,7 @@ _RUNTIME_KEYS = {
     "max_image_tokens",
     "micro_batch_size",
     "min_image_tokens",
+    "sort_rows",
     "temperature",
 }
 
@@ -321,12 +321,14 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         processor: Any,
         micro_batch_size: int,
         collate_workers: int = 0,
+        sort_rows: bool = True,
         **kwargs: Any,
     ) -> None:
         if micro_batch_size <= 0:
             raise ValueError("micro_batch_size must be positive")
         super().__init__(**kwargs)
         self.micro_batch_size = micro_batch_size
+        self.sort_rows = sort_rows
         self._chunk_collator = OrderedChunkCollator(processor, workers=collate_workers)
         self._last_step_metrics: dict[str, float] = {}
 
@@ -372,6 +374,10 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         Under data parallelism each rank encodes its share of the logical
         batch, all ranks compute the identical loss over the gathered global
         batch, each replays its own rows, and LoRA gradients are summed once.
+        When the rank's rows fit in one micro-batch the cache pass is skipped
+        and the loss backpropagates through a single encoding. Rows are
+        optionally sorted by modality and text length first; the loss is
+        permutation-equivariant, so this only reduces padding.
         """
 
         del num_items_in_batch
@@ -383,6 +389,8 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         samples = cast(list[dict[str, Any]], inputs.get("samples"))
         if not samples:
             raise ValueError("cached VLM embedding training needs raw samples")
+        if self.sort_rows:
+            samples = sorted(samples, key=row_length_key)
 
         started = time.perf_counter()
         if torch.cuda.is_available():
@@ -390,9 +398,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         chunks = self._chunks(samples)
         chunk_seeds = torch.randint(0, 2**62, (len(chunks),)).tolist()
         jobs = list(zip(chunks, chunk_seeds, strict=True))
-        collated: Iterator[dict[str, Any]] = self._chunk_collator.iterate(
-            itertools.chain(jobs, jobs)
-        )
+        collated: Iterator[dict[str, Any]] = self._chunk_collator.iterate(jobs)
         collate_wait = 0.0
 
         def next_batch() -> dict[str, Any]:
@@ -402,6 +408,17 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             collate_wait += time.perf_counter() - waited
             return batch
 
+        if len(chunks) == 1:
+            return self._single_pass_step(
+                model,
+                samples,
+                next_batch(),
+                started=started,
+                collate_wait=collate_wait,
+                distributed=distributed,
+            )
+
+        batches: list[dict[str, Any]] = []
         rng_states: list[_RngState] = []
         cached_by_role: dict[str, list[torch.Tensor]] = {
             "query": [],
@@ -411,6 +428,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         with torch.no_grad():
             for _ in chunks:
                 batch = next_batch()
+                batches.append(batch)
                 rng_states.append(_capture_rng_state())
                 with self.compute_loss_context_manager():
                     embeddings = self._encode_chunk(model, batch)
@@ -445,8 +463,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         }
 
         offset = 0
-        for chunk, rng_state in zip(chunks, rng_states, strict=True):
-            batch = next_batch()
+        for chunk, batch, rng_state in zip(chunks, batches, rng_states, strict=True):
             _restore_rng_state(rng_state)
             with self.compute_loss_context_manager():
                 embeddings = self._encode_chunk(model, batch)
@@ -463,6 +480,70 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             self.accelerator.backward(surrogate)
             offset = end
 
+        return self._finish_step(
+            model,
+            loss,
+            started=started,
+            cache_seconds=cache_seconds,
+            collate_wait=collate_wait,
+            rows=len(samples),
+            distributed=distributed,
+        )
+
+    def _single_pass_step(
+        self,
+        model: nn.Module,
+        samples: list[dict[str, Any]],
+        batch: dict[str, Any],
+        *,
+        started: float,
+        collate_wait: float,
+        distributed: bool,
+    ) -> torch.Tensor:
+        with self.compute_loss_context_manager():
+            embeddings = self._encode_chunk(model, batch)
+        local = torch.stack([embeddings[role] for role in _EMBEDDING_ROLES], dim=1)
+        if distributed:
+            global_rows, offset = gather_rank_rows(local.detach())
+            global_rows = torch.cat(
+                [
+                    global_rows[:offset].to(local.device),
+                    local,
+                    global_rows[offset + len(samples) :].to(local.device),
+                ]
+            )
+            metadata = gather_rank_metadata(samples)
+        else:
+            global_rows, metadata = local, samples
+        loss = contrastive_embedding_loss(
+            global_rows[:, 0],
+            global_rows[:, 1],
+            global_rows[:, 2],
+            temperature=self.embedding_temperature,
+            candidate_mask=build_candidate_mask(metadata),
+        )
+        self.accelerator.backward(loss)
+        return self._finish_step(
+            model,
+            loss,
+            started=started,
+            cache_seconds=0.0,
+            collate_wait=collate_wait,
+            rows=len(samples),
+            distributed=distributed,
+        )
+
+    def _finish_step(
+        self,
+        model: nn.Module,
+        loss: torch.Tensor,
+        *,
+        started: float,
+        cache_seconds: float,
+        collate_wait: float,
+        rows: int,
+        distributed: bool,
+    ) -> torch.Tensor:
         if distributed:
             all_reduce_gradients(
                 [
@@ -475,13 +556,28 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             started=started,
             cache_seconds=cache_seconds,
             collate_wait=collate_wait,
-            rows=len(samples),
+            rows=rows,
         )
         if is_rank_zero():
             print(
                 json.dumps({"vlm_embedding_step": self._last_step_metrics}), flush=True
             )
         return loss.detach()
+
+
+def row_length_key(sample: dict[str, Any]) -> tuple[tuple[bool, ...], int]:
+    """Group rows by which roles carry an image, then by total text length."""
+
+    roles = [
+        value if isinstance(value := sample.get(role), dict) else {}
+        for role in _EMBEDDING_ROLES
+    ]
+    images = tuple(
+        role.get("image_ref") is not None or role.get("image") is not None
+        for role in roles
+    )
+    text = sum(len(str(role.get("text") or "")) for role in roles)
+    return images, text
 
 
 def _step_metrics(
@@ -603,6 +699,7 @@ def vlm_embedding_run(
             processor=processor,
             micro_batch_size=micro_batch_size,
             collate_workers=collate_workers,
+            sort_rows=bool(train_config.get("sort_rows", True)),
             data_collator=collate_raw_vlm_embedding_samples,
         )
     else:
