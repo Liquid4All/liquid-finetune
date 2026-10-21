@@ -196,8 +196,11 @@ def test_cached_contrastive_replay_matches_full_batch_gradient():
         return torch.nn.functional.normalize(model(batch["x"]), dim=-1)
 
     trainer._chunk_collator = SimpleNamespace(
-        iterate=lambda jobs: (collate(chunk) for chunk, _seed in jobs)
+        iterate=lambda jobs: (collate(chunk) for chunk, _seed in jobs),
+        submit=lambda jobs: (collate(chunk) for chunk, _seed in jobs),
     )
+    trainer._plans = {}
+    trainer._lookahead = None
     trainer._last_step_metrics = {}
     trainer._encode = types.MethodType(encode, trainer)
     cached_loss = trainer.training_step(cached_model, {"samples": samples})
@@ -247,7 +250,11 @@ def test_dittopilot_vlm_embedding_exposes_memory_and_tracking_controls():
     assert "micro_batch_size: ${MICRO_BATCH_SIZE}" in runner
     assert "cached_loss: ${CACHED_LOSS}" in runner
     assert "collate_workers: ${COLLATE_WORKERS}" in runner
-    assert 'RAY_TMPDIR="/tmp/ray-${SLURM_JOB_ID:-$$}"' in runner
+    assert 'JOB_SCRATCH="/tmp/vlm-${SLURM_JOB_ID:-$$}"' in runner
+    assert 'RAY_TMPDIR="${RAY_TMPDIR:-${JOB_SCRATCH}/ray}"' in runner
+    assert (
+        'MIOPEN_USER_DB_PATH="${MIOPEN_USER_DB_PATH:-${JOB_SCRATCH}/miopen}"' in runner
+    )
     assert 'WANDB_MODE="${WANDB_MODE:-online}"' in runner
     assert 'WANDB_PROJECT="${WANDB_PROJECT:-retrieval-lfm}"' in runner
 
@@ -573,8 +580,11 @@ def _toy_cached_trainer(micro_batch_size: int) -> CachedLFMVLMEmbeddingTrainer:
         return torch.nn.functional.normalize(model(batch["x"]), dim=-1)
 
     trainer._chunk_collator = SimpleNamespace(
-        iterate=lambda jobs: (collate(chunk) for chunk, _seed in jobs)
+        iterate=lambda jobs: (collate(chunk) for chunk, _seed in jobs),
+        submit=lambda jobs: (collate(chunk) for chunk, _seed in jobs),
     )
+    trainer._plans = {}
+    trainer._lookahead = None
     trainer._encode = types.MethodType(encode, trainer)
     return trainer
 
@@ -674,6 +684,25 @@ def test_row_order_does_not_change_loss_or_gradient():
     reverse = _toy_step(2, samples[::-1])
     torch.testing.assert_close(torch.tensor(reverse[0]), torch.tensor(forward[0]))
     torch.testing.assert_close(torch.tensor(reverse[1]), torch.tensor(forward[1]))
+
+
+def test_lookahead_batches_preserve_order_and_plan_the_next_step():
+    trainer = _toy_cached_trainer(micro_batch_size=2)
+    submitted: list[int] = []
+    trainer._chunk_collator = SimpleNamespace(
+        submit=lambda jobs: submitted.append(len(list(jobs))) or iter(())
+    )
+    batches = [{"samples": _toy_samples(3)}, {"samples": _toy_samples(4)}]
+    iterator = iter(batches)
+
+    first, _ = trainer.get_batch_samples(iterator, 1, torch.device("cpu"))
+    assert first == [batches[0]]
+    assert set(trainer._plans) == {id(batches[0]), id(batches[1])}
+    assert submitted == [2, 2]
+    second, _ = trainer.get_batch_samples(iterator, 1, torch.device("cpu"))
+    assert second == [batches[1]]
+    assert submitted == [2, 2]
+    assert trainer.get_batch_samples(iterator, 1, torch.device("cpu"))[0] == []
 
 
 def test_row_length_key_groups_image_roles_before_text_length():
