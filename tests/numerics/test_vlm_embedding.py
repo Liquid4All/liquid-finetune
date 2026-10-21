@@ -22,6 +22,7 @@ from leap_finetune.data_loading.validate_dataset_format import (
     validate_dataset_format,
 )
 from leap_finetune.training.vlm_embedding import (
+    whole_warmup_steps,
     CachedLFMVLMEmbeddingTrainer,
     configure_gradient_checkpointing,
     contrastive_embedding_loss,
@@ -441,3 +442,18 @@ def test_vlm_embedding_dataset_accepts_shared_dataset_image_refs(tmp_path):
     dataset = Dataset.from_list([normalize_columns("vlm_embedding")(row)])
 
     assert len(validate_dataset_format(dataset, "vlm_embedding")) == 1
+
+
+@pytest.mark.parametrize(
+    ("ratio", "steps", "expected"),
+    [(0.05, 8, 0), (0.05, 80, 4), (0.0, 8, 0), (0.1, 100, 10)],
+)
+def test_whole_warmup_steps_rounds_down(ratio, steps, expected):
+    assert whole_warmup_steps(ratio, steps) == expected
+
+
+def test_whole_warmup_steps_rejects_invalid_inputs():
+    with pytest.raises(ValueError, match="warmup_ratio"):
+        whole_warmup_steps(1.0, 8)
+    with pytest.raises(ValueError, match="max_steps"):
+        whole_warmup_steps(0.05, 0)

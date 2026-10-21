@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -149,6 +150,20 @@ def configure_gradient_checkpointing(model: nn.Module, scope: str) -> bool:
         )
     enable()
     return False
+
+
+def whole_warmup_steps(warmup_ratio: float, max_steps: int) -> int:
+    """Round a warmup ratio down to whole optimizer steps.
+
+    Transformers rounds ratios up, so a short run with any positive ratio
+    spends its first optimizer step at learning rate zero.
+    """
+
+    if not 0 <= warmup_ratio < 1:
+        raise ValueError("warmup_ratio must be in [0, 1)")
+    if max_steps <= 0:
+        raise ValueError("whole-step warmup needs a positive max_steps")
+    return math.floor(warmup_ratio * max_steps)
 
 
 class LFMVLMEmbeddingTrainer(RayDataLoaderMixin, Trainer):
@@ -343,6 +358,13 @@ def vlm_embedding_run(
     )
     if not filtered.get("dataloader_num_workers", 0):
         filtered.pop("dataloader_prefetch_factor", None)
+    warmup_ratio = filtered.pop("warmup_ratio", None)
+    if warmup_ratio is not None and int(filtered.get("max_steps", -1)) > 0:
+        filtered["warmup_steps"] = whole_warmup_steps(
+            float(warmup_ratio), int(filtered["max_steps"])
+        )
+    elif warmup_ratio is not None:
+        filtered["warmup_ratio"] = warmup_ratio
     if checkpointing_scope == "auto":
         checkpointing_scope = (
             "all" if filtered.get("gradient_checkpointing", False) else "none"
@@ -423,4 +445,5 @@ __all__ = [
     "contrastive_embedding_loss",
     "pool_last_attended_token",
     "vlm_embedding_run",
+    "whole_warmup_steps",
 ]
