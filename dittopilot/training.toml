@@ -2,9 +2,9 @@
 description = "Native-dimension assistant-prefix contrastive adaptation for generative vision-language checkpoints."
 mode = "adapter"
 modality = "image"
-command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --micro-batch-size {{micro_batch_size}} --cached-loss {{cached_loss}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --gradient-checkpointing {{gradient_checkpointing}} --gradient-checkpointing-scope {{gradient_checkpointing_scope}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --tracker {{tracker}} --seed {{seed}}"
+command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --micro-batch-size {{micro_batch_size}} --collate-workers {{collate_workers}} --cached-loss {{cached_loss}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --gradient-checkpointing {{gradient_checkpointing}} --gradient-checkpointing-scope {{gradient_checkpointing_scope}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --tracker {{tracker}} --seed {{seed}}"
 gpus = 1
-cpus = 16
+cpus = 32
 nodes = 1
 tasks_per_node = 1
 memory = "256G"
@@ -26,6 +26,11 @@ description = "Logical per-device contrastive batch size used by one exact InfoN
 type = "int"
 default = 32
 description = "Maximum number of rows encoded at once during cached gradient replay."
+
+[vlm_embedding.args.collate_workers]
+type = "int"
+default = 16
+description = "Worker processes that load images and build micro-batches ahead of the accelerator during cached replay; 0 collates inline."
 
 [vlm_embedding.args.cached_loss]
 type = "str"

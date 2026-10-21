@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import itertools
+import json
 import logging
 import math
+import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -13,6 +17,7 @@ from transformers import PreTrainedModel, ProcessorMixin, Trainer, TrainingArgum
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
 from leap_finetune.checkpointing.model_loading import load_vlm_model
 from leap_finetune.data_loading.vlm_embedding import (
+    OrderedChunkCollator,
     build_candidate_mask,
     collate_raw_vlm_embedding_samples,
     create_vlm_embedding_collate_fn,
@@ -39,6 +44,7 @@ logger = logging.getLogger(__name__)
 _RUNTIME_KEYS = {
     "adapter_path",
     "cached_loss",
+    "collate_workers",
     "do_image_splitting",
     "gradient_checkpointing_scope",
     "leap_run_name_template",
@@ -231,13 +237,26 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         *,
         processor: Any,
         micro_batch_size: int,
+        collate_workers: int = 0,
         **kwargs: Any,
     ) -> None:
         if micro_batch_size <= 0:
             raise ValueError("micro_batch_size must be positive")
         super().__init__(**kwargs)
         self.micro_batch_size = micro_batch_size
-        self._micro_collator = create_vlm_embedding_collate_fn(processor)
+        self._chunk_collator = OrderedChunkCollator(processor, workers=collate_workers)
+        self._last_step_metrics: dict[str, float] = {}
+
+    def train(self, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return super().train(*args, **kwargs)
+        finally:
+            self._chunk_collator.close()
+
+    def log(self, logs: dict[str, float], *args: Any, **kwargs: Any) -> None:
+        if "loss" in logs and self._last_step_metrics:
+            logs = {**logs, **self._last_step_metrics}
+        super().log(logs, *args, **kwargs)
 
     def _chunks(self, samples: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         return [
@@ -248,9 +267,9 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
     def _encode_chunk(
         self,
         model: nn.Module,
-        samples: list[dict[str, Any]],
+        batch: dict[str, Any],
     ) -> dict[str, torch.Tensor]:
-        batch = self._prepare_inputs(self._micro_collator(samples))
+        batch = self._prepare_inputs(batch)
         return {
             role: self._encode(
                 model,
@@ -275,7 +294,24 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         if not samples:
             raise ValueError("cached VLM embedding training needs raw samples")
 
+        started = time.perf_counter()
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
         chunks = self._chunks(samples)
+        chunk_seeds = torch.randint(0, 2**62, (len(chunks),)).tolist()
+        jobs = list(zip(chunks, chunk_seeds, strict=True))
+        collated: Iterator[dict[str, Any]] = self._chunk_collator.iterate(
+            itertools.chain(jobs, jobs)
+        )
+        collate_wait = 0.0
+
+        def next_batch() -> dict[str, Any]:
+            nonlocal collate_wait
+            waited = time.perf_counter()
+            batch = next(collated)
+            collate_wait += time.perf_counter() - waited
+            return batch
+
         rng_states: list[_RngState] = []
         cached_by_role: dict[str, list[torch.Tensor]] = {
             "query": [],
@@ -283,13 +319,15 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             "negative": [],
         }
         with torch.no_grad():
-            for chunk in chunks:
+            for _ in chunks:
+                batch = next_batch()
                 rng_states.append(_capture_rng_state())
                 with self.compute_loss_context_manager():
-                    embeddings = self._encode_chunk(model, chunk)
+                    embeddings = self._encode_chunk(model, batch)
                 for role, value in embeddings.items():
                     cached_by_role[role].append(value.detach())
 
+        cache_seconds = time.perf_counter() - started
         cached = {
             role: torch.cat(values, dim=0).requires_grad_()
             for role, values in cached_by_role.items()
@@ -310,9 +348,10 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
 
         offset = 0
         for chunk, rng_state in zip(chunks, rng_states, strict=True):
+            batch = next_batch()
             _restore_rng_state(rng_state)
             with self.compute_loss_context_manager():
-                embeddings = self._encode_chunk(model, chunk)
+                embeddings = self._encode_chunk(model, batch)
                 end = offset + len(chunk)
                 surrogate = sum(
                     (
@@ -326,7 +365,34 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             self.accelerator.backward(surrogate)
             offset = end
 
+        self._last_step_metrics = _step_metrics(
+            started=started,
+            cache_seconds=cache_seconds,
+            collate_wait=collate_wait,
+            rows=len(samples),
+        )
+        if is_rank_zero():
+            print(
+                json.dumps({"vlm_embedding_step": self._last_step_metrics}), flush=True
+            )
         return loss.detach()
+
+
+def _step_metrics(
+    *, started: float, cache_seconds: float, collate_wait: float, rows: int
+) -> dict[str, float]:
+    seconds = time.perf_counter() - started
+    metrics = {
+        "perf/step_seconds": seconds,
+        "perf/cache_pass_seconds": cache_seconds,
+        "perf/collate_wait_seconds": collate_wait,
+        "perf/collate_wait_fraction": collate_wait / seconds if seconds else 0.0,
+        "perf/rows_per_second": rows / seconds if seconds else 0.0,
+    }
+    if torch.cuda.is_available():
+        metrics["perf/peak_allocated_gib"] = torch.cuda.max_memory_allocated() / 2**30
+        metrics["perf/peak_reserved_gib"] = torch.cuda.max_memory_reserved() / 2**30
+    return metrics
 
 
 def vlm_embedding_run(
@@ -349,6 +415,7 @@ def vlm_embedding_run(
     temperature = float(train_config.get("temperature", 0.02))
     cached_loss = bool(train_config.get("cached_loss", False))
     micro_batch_size = int(train_config.get("micro_batch_size", 32))
+    collate_workers = int(train_config.get("collate_workers", 0))
     checkpointing_scope = train_config.get("gradient_checkpointing_scope", "auto")
 
     filtered, _ = filter_runtime_config_kwargs(
@@ -407,6 +474,7 @@ def vlm_embedding_run(
         trainer_kwargs.update(
             processor=processor,
             micro_batch_size=micro_batch_size,
+            collate_workers=collate_workers,
             data_collator=collate_raw_vlm_embedding_samples,
         )
     else:

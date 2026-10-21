@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Sequence
+import itertools
+from collections import deque
+from collections.abc import Iterable, Iterator, Sequence
+import threading
+from concurrent.futures import Executor, Future, ProcessPoolExecutor, ThreadPoolExecutor
 from functools import lru_cache
 from typing import Any
 
@@ -36,7 +40,9 @@ def _load_referenced_image(reference: dict[str, Any]) -> Any:
     return image
 
 
-def _messages(item: dict[str, Any]) -> list[dict[str, Any]]:
+def _messages(
+    item: dict[str, Any], generator: torch.Generator | None = None
+) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     variants = item.pop("instruction_variants", None)
     if variants:
@@ -45,7 +51,7 @@ def _messages(item: dict[str, Any]) -> list[dict[str, Any]]:
         ):
             raise ValueError("instruction_variants must be non-empty strings")
         instruction = variants[
-            int(torch.randint(len(variants), size=(), device="cpu").item())
+            int(torch.randint(len(variants), size=(), generator=generator).item())
         ]
     else:
         instruction = item.get("instruction")
@@ -72,7 +78,11 @@ def create_vlm_embedding_collate_fn(processor):
 
     processor.tokenizer.padding_side = "left"
 
-    def encode_role(samples: list[dict[str, Any]], role: str):
+    def encode_role(
+        samples: list[dict[str, Any]],
+        role: str,
+        generator: torch.Generator | None,
+    ):
         conversations = []
         loaded_images = []
         try:
@@ -87,7 +97,7 @@ def create_vlm_embedding_collate_fn(processor):
                     image = load_image(item["image"])
                     item["image"] = image
                     loaded_images.append(image)
-                conversations.append(_messages(item))
+                conversations.append(_messages(item, generator))
             return processor.apply_chat_template(
                 conversations,
                 add_generation_prompt=True,
@@ -101,11 +111,14 @@ def create_vlm_embedding_collate_fn(processor):
                 if hasattr(image, "close"):
                     image.close()
 
-    def collate(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    def collate(
+        samples: list[dict[str, Any]], *, seed: int | None = None
+    ) -> dict[str, Any]:
         if not samples:
             raise ValueError("cannot collate an empty VLM embedding batch")
+        generator = None if seed is None else torch.Generator().manual_seed(seed)
         batch = {
-            role: encode_role(samples, role)
+            role: encode_role(samples, role, generator)
             for role in ("query", "positive", "negative")
         }
         batch["candidate_mask"] = build_candidate_mask(samples)
@@ -191,7 +204,122 @@ def collate_raw_vlm_embedding_samples(
 
 
 __all__ = [
+    "OrderedChunkCollator",
     "build_candidate_mask",
     "collate_raw_vlm_embedding_samples",
     "create_vlm_embedding_collate_fn",
 ]
+
+
+CollateJob = tuple[list[dict[str, Any]], int]
+
+_WORKER_COLLATE: Any = None
+
+
+def _initialize_collate_worker(processor: Any) -> None:
+    global _WORKER_COLLATE
+    torch.set_num_threads(1)
+    _WORKER_COLLATE = create_vlm_embedding_collate_fn(processor)
+
+
+def _collate_in_worker(samples: list[dict[str, Any]], seed: int) -> dict[str, Any]:
+    if _WORKER_COLLATE is None:
+        raise RuntimeError("collate worker was not initialized")
+    return _WORKER_COLLATE(samples, seed=seed)
+
+
+_THREAD_STATE = threading.local()
+
+
+def _initialize_collate_thread(processor: Any) -> None:
+    _THREAD_STATE.collate = create_vlm_embedding_collate_fn(copy.deepcopy(processor))
+
+
+def _collate_in_thread(samples: list[dict[str, Any]], seed: int) -> dict[str, Any]:
+    return _THREAD_STATE.collate(samples, seed=seed)
+
+
+class OrderedChunkCollator:
+    """Collate seeded micro-batches in order, optionally in worker processes.
+
+    With ``workers > 0`` a persistent pool collates up to ``prefetch`` chunks
+    ahead of the consumer, so image loading and preprocessing overlap
+    accelerator work. The ``thread`` backend shares collated tensors without
+    copying and gives each thread its own processor; the ``process`` backend
+    isolates workers but pays to move tensors between processes. Results are
+    yielded in submission order and depend only on each chunk's samples and
+    seed, so inline and pooled collation match.
+    """
+
+    def __init__(
+        self,
+        processor: Any,
+        *,
+        workers: int = 0,
+        prefetch: int | None = None,
+        backend: str = "thread",
+        start_method: str = "spawn",
+    ) -> None:
+        if workers < 0:
+            raise ValueError("collate workers must be non-negative")
+        if backend not in {"thread", "process"}:
+            raise ValueError("collate backend must be 'thread' or 'process'")
+        if prefetch is not None and prefetch <= 0:
+            raise ValueError("collate prefetch must be positive")
+        self.workers = workers
+        self.prefetch = prefetch if prefetch is not None else workers + 2
+        self._processor = processor
+        self.backend = backend
+        self._start_method = start_method
+        self._inline = create_vlm_embedding_collate_fn(processor)
+        self._executor: Executor | None = None
+        self._task = _collate_in_thread if backend == "thread" else _collate_in_worker
+
+    def _pool(self) -> Executor:
+        if self._executor is None:
+            if self.backend == "thread":
+                # Process-wide: collation threads, not torch's intra-op pool,
+                # provide the parallelism, and the pool otherwise sizes itself
+                # to every core on the node rather than the job's allocation.
+                torch.set_num_threads(1)
+                self._executor = ThreadPoolExecutor(
+                    max_workers=self.workers,
+                    thread_name_prefix="vlm-collate",
+                    initializer=_initialize_collate_thread,
+                    initargs=(self._processor,),
+                )
+            else:
+                self._executor = ProcessPoolExecutor(
+                    max_workers=self.workers,
+                    mp_context=torch.multiprocessing.get_context(self._start_method),
+                    initializer=_initialize_collate_worker,
+                    initargs=(self._processor,),
+                )
+        return self._executor
+
+    def iterate(self, jobs: Iterable[CollateJob]) -> Iterator[dict[str, Any]]:
+        if self.workers == 0:
+            for samples, seed in jobs:
+                yield self._inline(samples, seed=seed)
+            return
+        pool = self._pool()
+        remaining = iter(jobs)
+        pending: deque[Future[dict[str, Any]]] = deque(
+            pool.submit(self._task, samples, seed)
+            for samples, seed in itertools.islice(remaining, self.prefetch)
+        )
+        try:
+            while pending:
+                result = pending.popleft().result()
+                upcoming = next(remaining, None)
+                if upcoming is not None:
+                    pending.append(pool.submit(self._task, *upcoming))
+                yield result
+        finally:
+            for future in pending:
+                future.cancel()
+
+    def close(self) -> None:
+        if self._executor is not None:
+            self._executor.shutdown(wait=True, cancel_futures=True)
+            self._executor = None

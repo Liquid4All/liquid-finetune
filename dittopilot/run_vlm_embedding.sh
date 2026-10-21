@@ -8,6 +8,7 @@ RUN_NAME=""
 LEARNING_RATE="1e-4"
 BATCH_SIZE="8192"
 MICRO_BATCH_SIZE="32"
+COLLATE_WORKERS="0"
 CACHED_LOSS="true"
 GRADIENT_ACCUMULATION_STEPS="1"
 GRADIENT_CHECKPOINTING="false"
@@ -32,6 +33,7 @@ while (($#)); do
     --learning-rate) LEARNING_RATE="$2"; shift 2 ;;
     --batch-size) BATCH_SIZE="$2"; shift 2 ;;
     --micro-batch-size) MICRO_BATCH_SIZE="$2"; shift 2 ;;
+    --collate-workers) COLLATE_WORKERS="$2"; shift 2 ;;
     --cached-loss) CACHED_LOSS="$2"; shift 2 ;;
     --gradient-accumulation-steps) GRADIENT_ACCUMULATION_STEPS="$2"; shift 2 ;;
     --gradient-checkpointing) GRADIENT_CHECKPOINTING="$2"; shift 2 ;;
@@ -54,6 +56,10 @@ case "${GRADIENT_CHECKPOINTING}" in
   true|false) ;;
   *) echo "gradient-checkpointing must be true or false" >&2; exit 2 ;;
 esac
+if ! [[ "${COLLATE_WORKERS}" =~ ^[0-9]+$ ]]; then
+  echo "collate-workers must be a non-negative integer" >&2
+  exit 2
+fi
 case "${CACHED_LOSS}" in
   true|false) ;;
   *) echo "cached-loss must be true or false" >&2; exit 2 ;;
@@ -115,6 +121,7 @@ training_config:
   per_device_train_batch_size: ${BATCH_SIZE}
   per_device_eval_batch_size: ${BATCH_SIZE}
   micro_batch_size: ${MICRO_BATCH_SIZE}
+  collate_workers: ${COLLATE_WORKERS}
   cached_loss: ${CACHED_LOSS}
   gradient_accumulation_steps: ${GRADIENT_ACCUMULATION_STEPS}
   gradient_checkpointing: ${GRADIENT_CHECKPOINTING}
@@ -132,7 +139,7 @@ training_config:
   save_strategy: "steps"
   save_steps: ${SAVE_STEPS}
   save_total_limit: 2
-  logging_steps: 10
+  logging_steps: 1
   dataloader_num_workers: 8
   dataloader_prefetch_factor: 4
   leap_run_name_template: "vlm-embedding-lora_a"

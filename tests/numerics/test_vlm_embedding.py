@@ -13,6 +13,7 @@ from PIL import Image
 
 import leap_finetune.data_loading.vlm_embedding as vlm_data
 from leap_finetune.data_loading.vlm_embedding import (
+    OrderedChunkCollator,
     build_candidate_mask,
     collate_raw_vlm_embedding_samples,
     create_vlm_embedding_collate_fn,
@@ -190,7 +191,10 @@ def test_cached_contrastive_replay_matches_full_batch_gradient():
     def encode(self, model, batch):
         return torch.nn.functional.normalize(model(batch["x"]), dim=-1)
 
-    trainer._micro_collator = collate
+    trainer._chunk_collator = SimpleNamespace(
+        iterate=lambda jobs: (collate(chunk) for chunk, _seed in jobs)
+    )
+    trainer._last_step_metrics = {}
     trainer._encode = types.MethodType(encode, trainer)
     cached_loss = trainer.training_step(cached_model, {"samples": samples})
 
@@ -223,6 +227,7 @@ def test_registered_vlm_embedding_defaults_use_cached_logical_batch():
     assert registered["max_steps"]["default"] == 80
     assert registered["save_steps"]["default"] == 10
     assert registered["gradient_accumulation_steps"]["default"] == 1
+    assert registered["collate_workers"]["default"] == 16
     assert registered["gradient_checkpointing"]["default"] == "false"
     assert registered["gradient_checkpointing_scope"]["default"] == "auto"
     assert registered["tracker"]["default"] == "wandb"
@@ -237,6 +242,7 @@ def test_dittopilot_vlm_embedding_exposes_memory_and_tracking_controls():
     assert 'tracker: "${TRACKER}"' in runner
     assert "micro_batch_size: ${MICRO_BATCH_SIZE}" in runner
     assert "cached_loss: ${CACHED_LOSS}" in runner
+    assert "collate_workers: ${COLLATE_WORKERS}" in runner
     assert 'WANDB_MODE="${WANDB_MODE:-online}"' in runner
     assert 'WANDB_PROJECT="${WANDB_PROJECT:-retrieval-lfm}"' in runner
 
@@ -442,6 +448,72 @@ def test_vlm_embedding_dataset_accepts_shared_dataset_image_refs(tmp_path):
     dataset = Dataset.from_list([normalize_columns("vlm_embedding")(row)])
 
     assert len(validate_dataset_format(dataset, "vlm_embedding")) == 1
+
+
+class _InstructionEchoProcessor:
+    """Picklable processor whose token ids reveal the sampled instruction."""
+
+    def __init__(self) -> None:
+        self.tokenizer = SimpleNamespace(padding_side="right")
+
+    def apply_chat_template(self, conversations, **kwargs):
+        lengths = []
+        for messages in conversations:
+            system = [m for m in messages if m["role"] == "system"]
+            lengths.append(len(system[0]["content"][0]["text"]) if system else 0)
+        ids = torch.tensor(lengths).unsqueeze(1)
+        return {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
+
+
+def _variant_jobs() -> list[tuple[list[dict], int]]:
+    query = {"instruction_variants": ["a", "bb", "ccc", "dddd"], "text": "q"}
+    label = {"instruction": "", "text": "label"}
+    chunk = [{"query": query, "positive": label, "negative": label}] * 4
+    return [(chunk, seed) for seed in range(12)]
+
+
+def _query_ids(batches) -> list[list[int]]:
+    return [batch["query"]["input_ids"].flatten().tolist() for batch in batches]
+
+
+def test_seeded_collation_reproduces_instruction_sampling():
+    collator = OrderedChunkCollator(_InstructionEchoProcessor(), workers=0)
+    jobs = _variant_jobs()
+
+    first = _query_ids(collator.iterate(jobs))
+    second = _query_ids(collator.iterate(jobs))
+
+    assert first == second
+    assert len({tuple(ids) for ids in first}) > 1
+
+
+@pytest.mark.parametrize("backend", ["thread", "process"])
+def test_pooled_collation_matches_inline_order_and_content(backend):
+    jobs = _variant_jobs()
+    inline = OrderedChunkCollator(_InstructionEchoProcessor(), workers=0)
+    pooled = OrderedChunkCollator(
+        _InstructionEchoProcessor(),
+        workers=3,
+        prefetch=2,
+        backend=backend,
+        start_method="fork",
+    )
+    try:
+        pooled_ids = _query_ids(pooled.iterate(jobs + jobs))
+    finally:
+        pooled.close()
+
+    inline_ids = _query_ids(inline.iterate(jobs))
+    assert pooled_ids == inline_ids + inline_ids
+
+
+def test_collator_rejects_invalid_worker_settings():
+    with pytest.raises(ValueError, match="workers"):
+        OrderedChunkCollator(_InstructionEchoProcessor(), workers=-1)
+    with pytest.raises(ValueError, match="prefetch"):
+        OrderedChunkCollator(_InstructionEchoProcessor(), workers=1, prefetch=0)
+    with pytest.raises(ValueError, match="backend"):
+        OrderedChunkCollator(_InstructionEchoProcessor(), backend="ray")
 
 
 @pytest.mark.parametrize(
