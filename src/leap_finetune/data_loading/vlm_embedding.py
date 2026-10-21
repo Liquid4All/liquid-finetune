@@ -2,11 +2,32 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Sequence
+from functools import lru_cache
 from typing import Any
 
 import torch
 
 from leap_finetune.data_loading.image_loader import load_image
+
+
+@lru_cache(maxsize=8)
+def _load_reference_dataset(path: str):
+    from datasets import load_from_disk
+
+    return load_from_disk(path, keep_in_memory=False)
+
+
+def _load_referenced_image(reference: dict[str, Any]) -> Any:
+    dataset_path = str(reference["dataset_path"])
+    row_index = int(reference["row_index"])
+    column = str(reference["column"])
+    dataset = _load_reference_dataset(dataset_path)
+    if row_index < 0 or row_index >= len(dataset):
+        raise IndexError(f"image_ref row {row_index} is outside {dataset_path}")
+    row = dataset[row_index]
+    if column not in row:
+        raise KeyError(f"image_ref column {column!r} is absent from {dataset_path}")
+    return row[column]
 
 
 def _messages(item: dict[str, Any]) -> list[dict[str, Any]]:
@@ -41,7 +62,12 @@ def create_vlm_embedding_collate_fn(processor):
         try:
             for sample in samples:
                 item = copy.deepcopy(sample[role])
-                if isinstance(item.get("image"), str):
+                image_reference = item.pop("image_ref", None)
+                if image_reference is not None:
+                    image = _load_referenced_image(image_reference)
+                    item["image"] = image
+                    loaded_images.append(image)
+                elif isinstance(item.get("image"), str):
                     image = load_image(item["image"])
                     item["image"] = image
                     loaded_images.append(image)

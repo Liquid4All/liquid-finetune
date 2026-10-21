@@ -11,6 +11,7 @@ import torch
 from datasets import Dataset
 from PIL import Image
 
+import leap_finetune.data_loading.vlm_embedding as vlm_data
 from leap_finetune.data_loading.vlm_embedding import (
     build_candidate_mask,
     collate_raw_vlm_embedding_samples,
@@ -332,6 +333,34 @@ def test_vlm_embedding_collator_omits_empty_candidate_system_prompt():
     assert [message["role"] for message in positive_messages] == ["user"]
 
 
+def test_vlm_embedding_collator_resolves_shared_dataset_image_refs(
+    tmp_path, monkeypatch
+):
+    processor = _FakeProcessor()
+    collator = create_vlm_embedding_collate_fn(processor)
+    reference = {
+        "dataset_path": str(tmp_path),
+        "row_index": 7,
+        "column": "positive_image",
+    }
+    resolved = []
+
+    def load_reference(value):
+        resolved.append(value)
+        return Image.new("RGB", (2, 2), "white")
+
+    monkeypatch.setattr(vlm_data, "_load_referenced_image", load_reference)
+    item = {"instruction": "", "image_ref": reference}
+
+    collator([{"query": item, "positive": item, "negative": item}])
+
+    assert resolved == [reference, reference, reference]
+    assert all(
+        [part["type"] for part in call[0][0][-1]["content"]] == ["image"]
+        for call in processor.calls
+    )
+
+
 def test_vlm_embedding_dataset_normalizes_relative_images(tmp_path):
     image_path = tmp_path / "image.png"
     Image.new("RGB", (2, 2), "white").save(image_path)
@@ -346,3 +375,29 @@ def test_vlm_embedding_dataset_normalizes_relative_images(tmp_path):
     validated = validate_dataset_format(dataset, "vlm_embedding")
     assert validated[0]["positive"]["image"] == str(image_path)
     assert "instruction" in validated[0]["query"]
+
+
+def test_vlm_embedding_dataset_accepts_shared_dataset_image_refs(tmp_path):
+    row = {
+        "query": {"instruction": "retrieve", "text": "question"},
+        "positive": {
+            "instruction": "",
+            "image_ref": {
+                "dataset_path": str(tmp_path),
+                "row_index": 0,
+                "column": "positive_image",
+            },
+        },
+        "negative": {
+            "instruction": "",
+            "image_ref": {
+                "dataset_path": str(tmp_path),
+                "row_index": 1,
+                "column": "positive_image",
+            },
+        },
+    }
+
+    dataset = Dataset.from_list([normalize_columns("vlm_embedding")(row)])
+
+    assert len(validate_dataset_format(dataset, "vlm_embedding")) == 1

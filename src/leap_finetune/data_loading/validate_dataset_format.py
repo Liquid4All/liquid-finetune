@@ -468,6 +468,8 @@ def get_row_filter(
         positive = row.get("positive")
         if not _is_nonempty_text(query) or not _is_nonempty_text(positive):
             return False
+        assert isinstance(query, str)
+        assert isinstance(positive, str)
         if query.strip() == positive.strip():
             return False
 
@@ -486,9 +488,19 @@ def get_row_filter(
                 return False
             text = value.get("text")
             image = value.get("image")
+            image_ref = value.get("image_ref")
             has_text = text is not None and _is_nonempty_text(text)
             has_image = image is not None and isinstance(image, str)
-            return (has_text or has_image) and (
+            has_image_ref = (
+                isinstance(image_ref, dict)
+                and isinstance(image_ref.get("dataset_path"), str)
+                and Path(image_ref["dataset_path"]).is_dir()
+                and isinstance(image_ref.get("row_index"), int)
+                and image_ref["row_index"] >= 0
+                and isinstance(image_ref.get("column"), str)
+                and bool(image_ref["column"])
+            )
+            return (has_text or has_image or has_image_ref) and (
                 not has_image or is_image_loadable(image)
             )
 
@@ -914,6 +926,18 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
                 and not pathlib.PurePosixPath(image).is_absolute()
             ):
                 value["image"] = str(pathlib.PurePosixPath(image_root) / image)
+            image_ref = value.get("image_ref")
+            if isinstance(image_ref, dict) and isinstance(
+                image_ref.get("dataset_path"), str
+            ):
+                reference_path = image_ref["dataset_path"]
+                if (
+                    image_root
+                    and not pathlib.PurePosixPath(reference_path).is_absolute()
+                ):
+                    image_ref["dataset_path"] = str(
+                        pathlib.PurePosixPath(image_root) / reference_path
+                    )
             row[role] = value
         return row
 
