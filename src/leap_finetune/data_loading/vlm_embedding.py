@@ -6,6 +6,7 @@ from functools import lru_cache
 from typing import Any
 
 import torch
+from PIL import Image
 
 from leap_finetune.data_loading.image_loader import load_image
 
@@ -27,7 +28,12 @@ def _load_referenced_image(reference: dict[str, Any]) -> Any:
     row = dataset[row_index]
     if column not in row:
         raise KeyError(f"image_ref column {column!r} is absent from {dataset_path}")
-    return row[column]
+    image = row[column]
+    if isinstance(image, Image.Image) and image.mode != "RGB":
+        converted = image.convert("RGB")
+        image.close()
+        return converted
+    return image
 
 
 def _messages(item: dict[str, Any]) -> list[dict[str, Any]]:

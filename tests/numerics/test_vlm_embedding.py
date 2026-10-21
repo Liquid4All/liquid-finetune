@@ -378,6 +378,29 @@ def test_vlm_embedding_collator_resolves_shared_dataset_image_refs(
     )
 
 
+@pytest.mark.parametrize("mode", ["RGBA", "L", "P", "LA", "RGB"])
+def test_referenced_images_are_converted_to_rgb(tmp_path, mode):
+    from datasets import Features
+    from datasets import Image as ImageFeature
+    from transformers.image_utils import infer_channel_dimension_format
+    import numpy as np
+
+    dataset_path = tmp_path / mode
+    Dataset.from_dict(
+        {"page": [Image.new(mode, (5, 7))]},
+        features=Features({"page": ImageFeature()}),
+    ).save_to_disk(str(dataset_path))
+    vlm_data._load_reference_dataset.cache_clear()
+
+    image = vlm_data._load_referenced_image(
+        {"dataset_path": str(dataset_path), "row_index": 0, "column": "page"}
+    )
+
+    assert image.mode == "RGB"
+    assert image.size == (5, 7)
+    infer_channel_dimension_format(np.asarray(image))
+
+
 def test_vlm_embedding_dataset_normalizes_relative_images(tmp_path):
     image_path = tmp_path / "image.png"
     Image.new("RGB", (2, 2), "white").save(image_path)
