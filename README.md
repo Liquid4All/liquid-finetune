@@ -57,8 +57,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 Clone the repo:
 
 ```bash
-git clone <repository-url>
-cd liquid_finetune
+git clone https://github.com/Liquid4All/liquid-finetune.git
+cd liquid-finetune
 ```
 
 ### Backend Install Profiles
