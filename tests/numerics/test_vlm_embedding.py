@@ -23,6 +23,7 @@ from leap_finetune.data_loading.validate_dataset_format import (
     validate_dataset_format,
 )
 from leap_finetune.training.vlm_embedding import (
+    per_device_batch_size,
     whole_warmup_steps,
     CachedLFMVLMEmbeddingTrainer,
     configure_gradient_checkpointing,
@@ -529,3 +530,105 @@ def test_whole_warmup_steps_rejects_invalid_inputs():
         whole_warmup_steps(1.0, 8)
     with pytest.raises(ValueError, match="max_steps"):
         whole_warmup_steps(0.05, 0)
+
+
+def _toy_samples(count: int) -> list[dict]:
+    return [
+        {
+            "loss_kind": "retrieval",
+            "candidate_group": "text",
+            "positive_key": f"p{index}",
+            "negative_key": f"n{index}",
+            "query": torch.tensor([1.0 + index, 0.5, -0.25]),
+            "positive": torch.tensor([0.75, 1.0 + index, 0.25]),
+            "negative": torch.tensor([-0.5, 0.25, 1.0 + index]),
+        }
+        for index in range(count)
+    ]
+
+
+def _toy_cached_trainer(micro_batch_size: int) -> CachedLFMVLMEmbeddingTrainer:
+    trainer = object.__new__(CachedLFMVLMEmbeddingTrainer)
+    trainer.micro_batch_size = micro_batch_size
+    trainer.embedding_temperature = 0.2
+    trainer.optimizer = SimpleNamespace(train=lambda: None)
+    trainer.accelerator = SimpleNamespace(backward=lambda value: value.backward())
+    trainer.compute_loss_context_manager = lambda: nullcontext()
+    trainer._prepare_inputs = lambda value: value
+    trainer._last_step_metrics = {}
+
+    def collate(chunk):
+        return {
+            role: {"x": torch.stack([sample[role] for sample in chunk])}
+            for role in ("query", "positive", "negative")
+        }
+
+    def encode(self, model, batch):
+        return torch.nn.functional.normalize(model(batch["x"]), dim=-1)
+
+    trainer._chunk_collator = SimpleNamespace(
+        iterate=lambda jobs: (collate(chunk) for chunk, _seed in jobs)
+    )
+    trainer._encode = types.MethodType(encode, trainer)
+    return trainer
+
+
+def _distributed_step_worker(rank, world, init_file, bounds, state, queue):
+    import torch.distributed as dist
+
+    dist.init_process_group(
+        "gloo", init_method=f"file://{init_file}", rank=rank, world_size=world
+    )
+    try:
+        model = torch.nn.Linear(3, 2, bias=False)
+        model.load_state_dict(state)
+        start, end = bounds[rank]
+        trainer = _toy_cached_trainer(micro_batch_size=2)
+        loss = trainer.training_step(model, {"samples": _toy_samples(5)[start:end]})
+        queue.put((rank, loss.item(), model.weight.grad.tolist()))
+    finally:
+        dist.destroy_process_group()
+
+
+def test_distributed_cached_step_matches_single_process_full_batch(tmp_path):
+    import multiprocessing
+
+    reference = torch.nn.Linear(3, 2, bias=False)
+    state = {key: value.clone() for key, value in reference.state_dict().items()}
+    samples = _toy_samples(5)
+    full_loss = _toy_cached_trainer(micro_batch_size=2).training_step(
+        reference, {"samples": samples}
+    )
+
+    context = multiprocessing.get_context("spawn")
+    queue = context.Queue()
+    bounds = [(0, 3), (3, 5)]
+    workers = [
+        context.Process(
+            target=_distributed_step_worker,
+            args=(rank, 2, str(tmp_path / "init"), bounds, state, queue),
+        )
+        for rank in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    results = sorted(queue.get(timeout=120) for _ in workers)
+    for worker in workers:
+        worker.join(timeout=60)
+        assert worker.exitcode == 0
+
+    for _rank, loss, grad in results:
+        torch.testing.assert_close(torch.tensor(loss), full_loss)
+        torch.testing.assert_close(torch.tensor(grad), reference.weight.grad)
+
+
+@pytest.mark.parametrize(
+    ("global_size", "world", "expected"), [(512, 8, 64), (8192, 4, 2048), (7, 1, 7)]
+)
+def test_per_device_batch_size_splits_global_batch(global_size, world, expected):
+    assert per_device_batch_size(global_size, world) == expected
+
+
+def test_per_device_batch_size_rejects_uneven_split():
+    with pytest.raises(ValueError, match="divisible"):
+        per_device_batch_size(512, 3)

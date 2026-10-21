@@ -10,8 +10,10 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
+from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 from transformers import PreTrainedModel, ProcessorMixin, Trainer, TrainingArguments
 
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
@@ -46,6 +48,7 @@ _RUNTIME_KEYS = {
     "cached_loss",
     "collate_workers",
     "do_image_splitting",
+    "global_batch_size",
     "gradient_checkpointing_scope",
     "leap_run_name_template",
     "loss",
@@ -54,6 +57,17 @@ _RUNTIME_KEYS = {
     "min_image_tokens",
     "temperature",
 }
+
+_EMBEDDING_ROLES = ("query", "positive", "negative")
+_MASK_FIELDS = (
+    "loss_kind",
+    "positive_key",
+    "negative_key",
+    "candidate_set_id",
+    "candidate_group",
+    "loss_group",
+    "modality",
+)
 
 _GRADIENT_CHECKPOINTING_COMPONENTS = {
     "language": "language_model",
@@ -117,6 +131,62 @@ def contrastive_embedding_loss(
     return F.cross_entropy(logits / temperature, labels)
 
 
+def _is_distributed() -> bool:
+    return dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1
+
+
+def _unwrap_data_parallel(model: nn.Module) -> nn.Module:
+    if isinstance(model, nn.parallel.DistributedDataParallel):
+        return model.module
+    return model
+
+
+def gather_rank_rows(local: torch.Tensor) -> tuple[torch.Tensor, int]:
+    """All-gather variable-length row blocks in rank order.
+
+    Returns the concatenated rows and this rank's offset into them.
+    """
+
+    world = dist.get_world_size()
+    count = torch.tensor([local.shape[0]], device=local.device, dtype=torch.int64)
+    counts = [torch.zeros_like(count) for _ in range(world)]
+    dist.all_gather(counts, count)
+    sizes = [int(value.item()) for value in counts]
+    padded = local.new_zeros((max(sizes), *local.shape[1:]))
+    padded[: local.shape[0]] = local
+    blocks = [torch.empty_like(padded) for _ in range(world)]
+    dist.all_gather(blocks, padded.contiguous())
+    rows = torch.cat([block[:size] for block, size in zip(blocks, sizes)], dim=0)
+    return rows, sum(sizes[: dist.get_rank()])
+
+
+def gather_rank_metadata(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """All-gather the candidate-mask fields of every rank's rows in rank order."""
+
+    local = [
+        {key: sample[key] for key in _MASK_FIELDS if key in sample}
+        for sample in samples
+    ]
+    gathered: list[list[dict[str, Any]] | None] = [None] * dist.get_world_size()
+    dist.all_gather_object(gathered, local)
+    return [row for block in gathered for row in cast(list[dict[str, Any]], block)]
+
+
+def all_reduce_gradients(parameters: list[nn.Parameter]) -> None:
+    """Sum gradients across ranks, treating absent local gradients as zero."""
+
+    if not parameters:
+        return
+    for parameter in parameters:
+        if parameter.grad is None:
+            parameter.grad = torch.zeros_like(parameter)
+    grads = [cast(torch.Tensor, parameter.grad) for parameter in parameters]
+    flat = _flatten_dense_tensors(grads)
+    dist.all_reduce(flat, op=dist.ReduceOp.SUM)
+    for grad, reduced in zip(grads, _unflatten_dense_tensors(flat, grads)):
+        grad.copy_(reduced)
+
+
 def _vlm_backbone(model):
     base_model = model.get_base_model() if hasattr(model, "get_base_model") else model
     backbone = getattr(base_model, "model", None)
@@ -156,6 +226,19 @@ def configure_gradient_checkpointing(model: nn.Module, scope: str) -> bool:
         )
     enable()
     return False
+
+
+def per_device_batch_size(global_batch_size: int, world_size: int) -> int:
+    """Split one logical contrastive batch evenly across data-parallel ranks."""
+
+    if global_batch_size <= 0 or world_size <= 0:
+        raise ValueError("global batch size and world size must be positive")
+    if global_batch_size % world_size:
+        raise ValueError(
+            f"global batch size {global_batch_size} is not divisible by "
+            f"{world_size} ranks"
+        )
+    return global_batch_size // world_size
 
 
 def whole_warmup_steps(warmup_ratio: float, max_steps: int) -> int:
@@ -284,9 +367,16 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         inputs: dict[str, torch.Tensor | Any],
         num_items_in_batch: torch.Tensor | int | None = None,
     ) -> torch.Tensor:
-        """Cache embeddings, differentiate the full loss, then replay chunks."""
+        """Cache embeddings, differentiate the full loss, then replay chunks.
+
+        Under data parallelism each rank encodes its share of the logical
+        batch, all ranks compute the identical loss over the gathered global
+        batch, each replays its own rows, and LoRA gradients are summed once.
+        """
 
         del num_items_in_batch
+        model = _unwrap_data_parallel(model)
+        distributed = _is_distributed()
         model.train()
         if hasattr(self.optimizer, "train") and callable(self.optimizer.train):
             self.optimizer.train()
@@ -328,22 +418,30 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
                     cached_by_role[role].append(value.detach())
 
         cache_seconds = time.perf_counter() - started
-        cached = {
-            role: torch.cat(values, dim=0).requires_grad_()
-            for role, values in cached_by_role.items()
-        }
-        candidate_mask = build_candidate_mask(samples)
+        local = torch.stack(
+            [torch.cat(cached_by_role[role], dim=0) for role in _EMBEDDING_ROLES],
+            dim=1,
+        )
+        if distributed:
+            global_rows, offset = gather_rank_rows(local)
+            metadata = gather_rank_metadata(samples)
+        else:
+            global_rows, offset, metadata = local, 0, samples
+        cached = global_rows.detach().requires_grad_()
         loss = contrastive_embedding_loss(
-            cached["query"],
-            cached["positive"],
-            cached["negative"],
+            cached[:, 0],
+            cached[:, 1],
+            cached[:, 2],
             temperature=self.embedding_temperature,
-            candidate_mask=candidate_mask,
+            candidate_mask=build_candidate_mask(metadata),
         )
         loss.backward()
+        local_gradients = cast(torch.Tensor, cached.grad)[
+            offset : offset + len(samples)
+        ].detach()
         embedding_gradients = {
-            role: cast(torch.Tensor, value.grad).detach()
-            for role, value in cached.items()
+            role: local_gradients[:, index]
+            for index, role in enumerate(_EMBEDDING_ROLES)
         }
 
         offset = 0
@@ -365,6 +463,14 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             self.accelerator.backward(surrogate)
             offset = end
 
+        if distributed:
+            all_reduce_gradients(
+                [
+                    parameter
+                    for parameter in model.parameters()
+                    if parameter.requires_grad
+                ]
+            )
         self._last_step_metrics = _step_metrics(
             started=started,
             cache_seconds=cache_seconds,
@@ -425,6 +531,28 @@ def vlm_embedding_run(
     )
     if not filtered.get("dataloader_num_workers", 0):
         filtered.pop("dataloader_prefetch_factor", None)
+    global_batch_size = train_config.get("global_batch_size")
+    if global_batch_size is not None:
+        if not cached_loss:
+            raise ValueError("global_batch_size requires cached_loss")
+        world_size = dist.get_world_size() if _is_distributed() else 1
+        filtered["per_device_train_batch_size"] = per_device_batch_size(
+            int(global_batch_size), world_size
+        )
+        filtered["per_device_eval_batch_size"] = filtered["per_device_train_batch_size"]
+        if is_rank_zero():
+            print(
+                json.dumps(
+                    {
+                        "vlm_embedding_batch": {
+                            "global": int(global_batch_size),
+                            "world_size": world_size,
+                            "per_device": filtered["per_device_train_batch_size"],
+                        }
+                    }
+                ),
+                flush=True,
+            )
     warmup_ratio = filtered.pop("warmup_ratio", None)
     if warmup_ratio is not None and int(filtered.get("max_steps", -1)) > 0:
         filtered["warmup_steps"] = whole_warmup_steps(
@@ -510,7 +638,11 @@ __all__ = [
     "LFMVLMEmbeddingTrainer",
     "CachedLFMVLMEmbeddingTrainer",
     "configure_gradient_checkpointing",
+    "all_reduce_gradients",
     "contrastive_embedding_loss",
+    "gather_rank_metadata",
+    "gather_rank_rows",
+    "per_device_batch_size",
     "pool_last_attended_token",
     "vlm_embedding_run",
     "whole_warmup_steps",

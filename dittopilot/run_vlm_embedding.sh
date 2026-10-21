@@ -118,6 +118,7 @@ dataset:
 training_config:
   extends: "DEFAULT_VLM_EMBEDDING"
   max_steps: ${MAX_STEPS}
+  global_batch_size: ${BATCH_SIZE}
   per_device_train_batch_size: ${BATCH_SIZE}
   per_device_eval_batch_size: ${BATCH_SIZE}
   micro_batch_size: ${MICRO_BATCH_SIZE}
