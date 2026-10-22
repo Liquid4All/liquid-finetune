@@ -13,6 +13,7 @@ import torch
 from PIL import Image
 
 from leap_finetune.data_loading.image_loader import load_image
+from leap_finetune.data_loading.lfm2_vl_padding import pad_to_batch_max
 
 
 @lru_cache(maxsize=8)
@@ -99,6 +100,7 @@ def create_vlm_embedding_collate_fn(processor, max_text_tokens: int | None = Non
     ):
         conversations = []
         loaded_images = []
+        batch_images = []
         try:
             for sample in samples:
                 item = copy.deepcopy(sample[role])
@@ -113,15 +115,20 @@ def create_vlm_embedding_collate_fn(processor, max_text_tokens: int | None = Non
                     image = load_image(item["image"])
                     item["image"] = image
                     loaded_images.append(image)
+                if item.get("image") is not None:
+                    batch_images.append(item["image"])
                 conversations.append(_messages(item, generator))
-            return processor.apply_chat_template(
-                conversations,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt",
-                padding=True,
-            )
+            with pad_to_batch_max(
+                getattr(processor, "image_processor", None), batch_images
+            ):
+                return processor.apply_chat_template(
+                    conversations,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    return_tensors="pt",
+                    padding=True,
+                )
         finally:
             for image in loaded_images:
                 if hasattr(image, "close"):
