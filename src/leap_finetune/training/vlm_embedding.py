@@ -55,6 +55,7 @@ _RUNTIME_KEYS = {
     "max_text_tokens",
     "micro_batch_size",
     "min_image_tokens",
+    "pooling",
     "retain_graphs",
     "sort_rows",
     "temperature",
@@ -98,6 +99,29 @@ def pool_last_attended_token(
     batch_indices = torch.arange(hidden_states.shape[0], device=hidden_states.device)
     pooled = hidden_states[batch_indices, last_indices]
     return F.normalize(pooled.float(), p=2, dim=-1)
+
+
+def pool_mean_attended_tokens(
+    hidden_states: torch.Tensor,
+    attention_mask: torch.Tensor,
+) -> torch.Tensor:
+    """L2-normalize the mean over attended states, matching vLLM MEAN pooling."""
+
+    if hidden_states.ndim != 3 or attention_mask.ndim != 2:
+        raise ValueError(
+            "expected [batch, sequence, hidden] states and [batch, sequence] mask"
+        )
+    if hidden_states.shape[:2] != attention_mask.shape:
+        raise ValueError("hidden-state and attention-mask shapes do not match")
+    counts = attention_mask.sum(dim=1, keepdim=True)
+    if not torch.all(counts > 0):
+        raise ValueError("every embedding sequence needs at least one attended token")
+    mask = attention_mask.unsqueeze(-1).to(dtype=torch.float32)
+    pooled = (hidden_states.float() * mask).sum(dim=1) / counts.to(torch.float32)
+    return F.normalize(pooled, p=2, dim=-1)
+
+
+POOLERS = {"last": pool_last_attended_token, "mean": pool_mean_attended_tokens}
 
 
 def contrastive_embedding_loss(
@@ -260,15 +284,18 @@ def whole_warmup_steps(warmup_ratio: float, max_steps: int) -> int:
 class LFMVLMEmbeddingTrainer(RayDataLoaderMixin, Trainer):
     """Trainer that preserves the generative checkpoint and optimizes native states."""
 
-    def __init__(self, *, temperature: float, **kwargs: Any) -> None:
+    def __init__(
+        self, *, temperature: float, pooling: str = "last", **kwargs: Any
+    ) -> None:
+        if pooling not in POOLERS:
+            raise ValueError(f"pooling must be one of {sorted(POOLERS)}")
         super().__init__(**kwargs)
         self.embedding_temperature = temperature
+        self.pool = POOLERS[pooling]
 
     def _encode(self, model, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         outputs = _vlm_backbone(model)(**batch, use_cache=False, return_dict=True)
-        return pool_last_attended_token(
-            outputs.last_hidden_state, batch["attention_mask"]
-        )
+        return self.pool(outputs.last_hidden_state, batch["attention_mask"])
 
     def compute_loss(
         self,
@@ -770,6 +797,7 @@ def vlm_embedding_run(
         )
     trainer = trainer_class(
         temperature=temperature,
+        pooling=str(train_config.get("pooling", "last")),
         model=trainable_model,
         processing_class=processor,
         args=args,
@@ -805,6 +833,7 @@ __all__ = [
     "gather_rank_rows",
     "per_device_batch_size",
     "pool_last_attended_token",
+    "pool_mean_attended_tokens",
     "vlm_embedding_run",
     "whole_warmup_steps",
 ]

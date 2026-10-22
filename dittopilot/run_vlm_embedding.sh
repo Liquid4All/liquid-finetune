@@ -19,6 +19,8 @@ GRADIENT_CHECKPOINTING_SCOPE="auto"
 MAX_STEPS="80"
 TEMPERATURE="0.02"
 MAX_IMAGE_TOKENS="256"
+MIN_IMAGE_TOKENS="64"
+POOLING="last"
 LORA_RANK="64"
 LORA_ALPHA="64"
 WARMUP_RATIO="0.05"
@@ -47,6 +49,8 @@ while (($#)); do
     --max-steps) MAX_STEPS="$2"; shift 2 ;;
     --temperature) TEMPERATURE="$2"; shift 2 ;;
     --max-image-tokens) MAX_IMAGE_TOKENS="$2"; shift 2 ;;
+    --min-image-tokens) MIN_IMAGE_TOKENS="$2"; shift 2 ;;
+    --pooling) POOLING="$2"; shift 2 ;;
     --lora-rank) LORA_RANK="$2"; shift 2 ;;
     --lora-alpha) LORA_ALPHA="$2"; shift 2 ;;
     --warmup-ratio) WARMUP_RATIO="$2"; shift 2 ;;
@@ -62,6 +66,14 @@ case "${GRADIENT_CHECKPOINTING}" in
   true|false) ;;
   *) echo "gradient-checkpointing must be true or false" >&2; exit 2 ;;
 esac
+case "${POOLING}" in
+  last|mean) ;;
+  *) echo "pooling must be last or mean" >&2; exit 2 ;;
+esac
+if ! [[ "${MIN_IMAGE_TOKENS}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "min-image-tokens must be a positive integer" >&2
+  exit 2
+fi
 if ! [[ "${MAX_TEXT_TOKENS}" =~ ^[0-9]+$ ]]; then
   echo "max-text-tokens must be a non-negative integer (0 disables truncation)" >&2
   exit 2
@@ -158,6 +170,8 @@ training_config:
   data_seed: ${SEED}
   temperature: ${TEMPERATURE}
   max_image_tokens: ${MAX_IMAGE_TOKENS}
+  min_image_tokens: ${MIN_IMAGE_TOKENS}
+  pooling: "${POOLING}"
   eval_strategy: "no"
   eval_on_start: false
   dataloader_drop_last: false

@@ -28,7 +28,9 @@ from leap_finetune.training.vlm_embedding import (
     CachedLFMVLMEmbeddingTrainer,
     configure_gradient_checkpointing,
     contrastive_embedding_loss,
+    LFMVLMEmbeddingTrainer,
     pool_last_attended_token,
+    pool_mean_attended_tokens,
     row_length_key,
 )
 
@@ -44,6 +46,24 @@ def test_pool_last_attended_token_supports_left_padding():
     pooled = pool_last_attended_token(hidden, mask)
     torch.testing.assert_close(pooled[0], torch.tensor([0.0, 1.0]))
     torch.testing.assert_close(pooled[1], torch.tensor([5.0 / 13.0, 12.0 / 13.0]))
+
+
+def test_pool_mean_attended_tokens_ignores_padding():
+    hidden = torch.tensor(
+        [
+            [[9.0, 9.0], [3.0, 0.0], [3.0, 8.0]],
+            [[0.0, 6.0], [0.0, 2.0], [7.0, 7.0]],
+        ]
+    )
+    mask = torch.tensor([[0, 1, 1], [1, 1, 0]])
+    pooled = pool_mean_attended_tokens(hidden, mask)
+    torch.testing.assert_close(pooled[0], torch.tensor([0.6, 0.8]))
+    torch.testing.assert_close(pooled[1], torch.tensor([0.0, 1.0]))
+
+
+def test_trainer_rejects_unknown_pooling():
+    with pytest.raises(ValueError, match="pooling must be one of"):
+        LFMVLMEmbeddingTrainer(temperature=0.02, pooling="cls")
 
 
 def test_contrastive_embedding_loss_prefers_aligned_pairs():
