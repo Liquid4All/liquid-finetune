@@ -52,6 +52,7 @@ _RUNTIME_KEYS = {
     "leap_run_name_template",
     "loss",
     "max_image_tokens",
+    "max_text_tokens",
     "micro_batch_size",
     "min_image_tokens",
     "retain_graphs",
@@ -324,6 +325,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         collate_workers: int = 0,
         sort_rows: bool = True,
         retain_graphs: bool = False,
+        max_text_tokens: int | None = None,
         **kwargs: Any,
     ) -> None:
         if micro_batch_size <= 0:
@@ -334,7 +336,9 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         self.retain_graphs = retain_graphs
         self._lookahead: dict[str, Any] | None = None
         self._plans: dict[int, _StepPlan] = {}
-        self._chunk_collator = OrderedChunkCollator(processor, workers=collate_workers)
+        self._chunk_collator = OrderedChunkCollator(
+            processor, workers=collate_workers, max_text_tokens=max_text_tokens
+        )
         self._last_step_metrics: dict[str, float] = {}
 
     def train(self, *args: Any, **kwargs: Any) -> Any:
@@ -742,6 +746,8 @@ def vlm_embedding_run(
         trainable_model = apply_peft_to_model(trainable_model, peft_config)
     configure_gradient_checkpointing(trainable_model, checkpointing_scope)
 
+    max_text_tokens = train_config.get("max_text_tokens")
+    max_text_tokens = int(max_text_tokens) if max_text_tokens else None
     trainer_class = (
         CachedLFMVLMEmbeddingTrainer if cached_loss else LFMVLMEmbeddingTrainer
     )
@@ -755,10 +761,13 @@ def vlm_embedding_run(
             collate_workers=collate_workers,
             sort_rows=bool(train_config.get("sort_rows", True)),
             retain_graphs=bool(train_config.get("retain_graphs", False)),
+            max_text_tokens=max_text_tokens,
             data_collator=collate_raw_vlm_embedding_samples,
         )
     else:
-        trainer_kwargs["data_collator"] = create_vlm_embedding_collate_fn(processor)
+        trainer_kwargs["data_collator"] = create_vlm_embedding_collate_fn(
+            processor, max_text_tokens
+        )
     trainer = trainer_class(
         temperature=temperature,
         model=trainable_model,

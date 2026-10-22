@@ -73,10 +73,24 @@ def _messages(
     return messages
 
 
-def create_vlm_embedding_collate_fn(processor):
-    """Collate three assistant-prefix VLM batches with explicit left padding."""
+def create_vlm_embedding_collate_fn(processor, max_text_tokens: int | None = None):
+    """Collate three assistant-prefix VLM batches with explicit left padding.
+
+    ``max_text_tokens`` truncates each role's text field to that many tokens
+    before templating, bounding sequence length for long text documents.
+    """
 
     processor.tokenizer.padding_side = "left"
+    if max_text_tokens is not None and max_text_tokens <= 0:
+        max_text_tokens = None
+
+    def truncate(text: str) -> str:
+        if max_text_tokens is None or len(text) <= max_text_tokens:
+            return text
+        ids = processor.tokenizer(text, add_special_tokens=False)["input_ids"]
+        if len(ids) <= max_text_tokens:
+            return text
+        return processor.tokenizer.decode(ids[:max_text_tokens])
 
     def encode_role(
         samples: list[dict[str, Any]],
@@ -88,6 +102,8 @@ def create_vlm_embedding_collate_fn(processor):
         try:
             for sample in samples:
                 item = copy.deepcopy(sample[role])
+                if isinstance(item.get("text"), str):
+                    item["text"] = truncate(item["text"])
                 image_reference = item.pop("image_ref", None)
                 if image_reference is not None:
                     image = _load_referenced_image(image_reference)
@@ -216,10 +232,10 @@ CollateJob = tuple[list[dict[str, Any]], int]
 _WORKER_COLLATE: Any = None
 
 
-def _initialize_collate_worker(processor: Any) -> None:
+def _initialize_collate_worker(processor: Any, max_text_tokens: int | None) -> None:
     global _WORKER_COLLATE
     torch.set_num_threads(1)
-    _WORKER_COLLATE = create_vlm_embedding_collate_fn(processor)
+    _WORKER_COLLATE = create_vlm_embedding_collate_fn(processor, max_text_tokens)
 
 
 def _collate_in_worker(samples: list[dict[str, Any]], seed: int) -> dict[str, Any]:
@@ -231,8 +247,10 @@ def _collate_in_worker(samples: list[dict[str, Any]], seed: int) -> dict[str, An
 _THREAD_STATE = threading.local()
 
 
-def _initialize_collate_thread(processor: Any) -> None:
-    _THREAD_STATE.collate = create_vlm_embedding_collate_fn(copy.deepcopy(processor))
+def _initialize_collate_thread(processor: Any, max_text_tokens: int | None) -> None:
+    _THREAD_STATE.collate = create_vlm_embedding_collate_fn(
+        copy.deepcopy(processor), max_text_tokens
+    )
 
 
 def _collate_in_thread(samples: list[dict[str, Any]], seed: int) -> dict[str, Any]:
@@ -259,6 +277,7 @@ class OrderedChunkCollator:
         prefetch: int | None = None,
         backend: str = "thread",
         start_method: str = "spawn",
+        max_text_tokens: int | None = None,
     ) -> None:
         if workers < 0:
             raise ValueError("collate workers must be non-negative")
@@ -271,7 +290,8 @@ class OrderedChunkCollator:
         self._processor = processor
         self.backend = backend
         self._start_method = start_method
-        self._inline = create_vlm_embedding_collate_fn(processor)
+        self.max_text_tokens = max_text_tokens
+        self._inline = create_vlm_embedding_collate_fn(processor, max_text_tokens)
         self._executor: Executor | None = None
         self._task = _collate_in_thread if backend == "thread" else _collate_in_worker
 
@@ -286,14 +306,14 @@ class OrderedChunkCollator:
                     max_workers=self.workers,
                     thread_name_prefix="vlm-collate",
                     initializer=_initialize_collate_thread,
-                    initargs=(self._processor,),
+                    initargs=(self._processor, self.max_text_tokens),
                 )
             else:
                 self._executor = ProcessPoolExecutor(
                     max_workers=self.workers,
                     mp_context=torch.multiprocessing.get_context(self._start_method),
                     initializer=_initialize_collate_worker,
-                    initargs=(self._processor,),
+                    initargs=(self._processor, self.max_text_tokens),
                 )
         return self._executor
 

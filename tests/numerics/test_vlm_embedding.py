@@ -339,6 +339,38 @@ def test_vlm_embedding_collator_uses_assistant_prefix_and_left_padding():
     assert all(call[1]["padding"] for call in processor.calls)
 
 
+class _WordTokenizer:
+    padding_side = "right"
+
+    def __call__(self, text, add_special_tokens=False):
+        return {"input_ids": text.split()}
+
+    def decode(self, ids):
+        return " ".join(ids)
+
+
+def test_vlm_embedding_collator_truncates_role_text_by_tokens():
+    processor = _FakeProcessor()
+    processor.tokenizer = _WordTokenizer()
+    collator = create_vlm_embedding_collate_fn(processor, max_text_tokens=3)
+    long = {"instruction": "Represent it.", "text": "one two three four five"}
+    short = {"instruction": "Represent it.", "text": "one two"}
+    collator([{"query": short, "positive": long, "negative": short}] * 2)
+
+    texts = {
+        role: conversations[0][-1]["content"][-1]["text"]
+        for role, (conversations, _kwargs) in zip(
+            ("query", "positive", "negative"), processor.calls, strict=True
+        )
+    }
+    assert texts == {
+        "query": "one two",
+        "positive": "one two three",
+        "negative": "one two",
+    }
+    assert long["text"] == "one two three four five"
+
+
 def test_vlm_embedding_collator_omits_empty_candidate_system_prompt():
     processor = _FakeProcessor()
     collator = create_vlm_embedding_collate_fn(processor)

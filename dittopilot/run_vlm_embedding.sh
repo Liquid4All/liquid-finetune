@@ -12,6 +12,7 @@ COLLATE_WORKERS="0"
 CACHED_LOSS="true"
 SORT_ROWS="true"
 RETAIN_GRAPHS="false"
+MAX_TEXT_TOKENS="512"
 GRADIENT_ACCUMULATION_STEPS="1"
 GRADIENT_CHECKPOINTING="false"
 GRADIENT_CHECKPOINTING_SCOPE="auto"
@@ -39,6 +40,7 @@ while (($#)); do
     --cached-loss) CACHED_LOSS="$2"; shift 2 ;;
     --sort-rows) SORT_ROWS="$2"; shift 2 ;;
     --retain-graphs) RETAIN_GRAPHS="$2"; shift 2 ;;
+    --max-text-tokens) MAX_TEXT_TOKENS="$2"; shift 2 ;;
     --gradient-accumulation-steps) GRADIENT_ACCUMULATION_STEPS="$2"; shift 2 ;;
     --gradient-checkpointing) GRADIENT_CHECKPOINTING="$2"; shift 2 ;;
     --gradient-checkpointing-scope) GRADIENT_CHECKPOINTING_SCOPE="$2"; shift 2 ;;
@@ -60,6 +62,10 @@ case "${GRADIENT_CHECKPOINTING}" in
   true|false) ;;
   *) echo "gradient-checkpointing must be true or false" >&2; exit 2 ;;
 esac
+if ! [[ "${MAX_TEXT_TOKENS}" =~ ^[0-9]+$ ]]; then
+  echo "max-text-tokens must be a non-negative integer (0 disables truncation)" >&2
+  exit 2
+fi
 if ! [[ "${COLLATE_WORKERS}" =~ ^[0-9]+$ ]]; then
   echo "collate-workers must be a non-negative integer" >&2
   exit 2
@@ -141,6 +147,7 @@ training_config:
   cached_loss: ${CACHED_LOSS}
   sort_rows: ${SORT_ROWS}
   retain_graphs: ${RETAIN_GRAPHS}
+  max_text_tokens: ${MAX_TEXT_TOKENS}
   gradient_accumulation_steps: ${GRADIENT_ACCUMULATION_STEPS}
   gradient_checkpointing: ${GRADIENT_CHECKPOINTING}
   gradient_checkpointing_scope: "${GRADIENT_CHECKPOINTING_SCOPE}"
