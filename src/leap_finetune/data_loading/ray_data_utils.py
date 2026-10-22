@@ -134,7 +134,9 @@ def ray_dataset_to_hf(ray_ds) -> Dataset | None:
 
     if not tables:
         return Dataset.from_dict({})
-    return Dataset(pa.concat_tables(tables))
+    # An explicit fingerprint skips datasets' default, which dill-pickles the
+    # whole in-memory table to hash it and dominates startup on large shards.
+    return Dataset(pa.concat_tables(tables), fingerprint=uuid.uuid4().hex)
 
 
 # === Dataset Pipeline ===
