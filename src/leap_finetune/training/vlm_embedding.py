@@ -5,7 +5,7 @@ import logging
 import math
 import os
 import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -584,7 +584,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
     def _count_inputs(self, batch: dict[str, Any]) -> None:
         for role in _EMBEDDING_ROLES:
             inputs = batch.get(role)
-            if not isinstance(inputs, dict):
+            if not isinstance(inputs, Mapping):
                 continue
             mask = inputs.get("attention_mask")
             self._step_tokens += 0 if mask is None else int(mask.sum())

@@ -891,10 +891,16 @@ def test_count_inputs_sums_attended_tokens_and_tiles():
     trainer = CachedLFMVLMEmbeddingTrainer.__new__(CachedLFMVLMEmbeddingTrainer)
     trainer._step_tokens, trainer._step_tiles = 0, 0
     mask = torch.tensor([[0, 1, 1], [1, 1, 1]])
+    from transformers import BatchFeature
+
     batch = {
-        "query": {"attention_mask": mask},
-        "positive": {"attention_mask": mask, "pixel_values": torch.zeros(3, 4, 2)},
-        "negative": {"attention_mask": mask, "pixel_values": torch.zeros(2, 4, 2)},
+        "query": BatchFeature({"attention_mask": mask}),
+        "positive": BatchFeature(
+            {"attention_mask": mask, "pixel_values": torch.zeros(3, 4, 2)}
+        ),
+        "negative": BatchFeature(
+            {"attention_mask": mask, "pixel_values": torch.zeros(2, 4, 2)}
+        ),
     }
     trainer._count_inputs(batch)
     trainer._count_inputs(batch)
