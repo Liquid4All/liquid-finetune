@@ -848,3 +848,25 @@ def test_dittopilot_exposes_distillation_controls():
     assert 'teacher_embeddings: "${TEACHER_EMBEDDINGS}"' in runner
     assert "distill_weight: ${DISTILL_WEIGHT}" in runner
     assert "teacher_temperature: ${TEACHER_TEMPERATURE}" in runner
+
+
+def test_step_profiler_writes_trace_for_window(tmp_path, monkeypatch):
+    from leap_finetune.training.vlm_embedding import StepProfiler
+
+    monkeypatch.setenv("VLM_EMBEDDING_PROFILE_DIR", str(tmp_path / "profile"))
+    monkeypatch.setenv("VLM_EMBEDDING_PROFILE_STEPS", "1:2")
+    profiler = StepProfiler.from_env()
+    assert profiler is not None
+    weight = torch.randn(8, 8)
+    for step in range(5):
+        profiler.on_step(step)
+        (weight @ weight).sum()
+    assert (tmp_path / "profile" / "trace.json").stat().st_size > 0
+    assert "aten::mm" in (tmp_path / "profile" / "cpu_time_total.txt").read_text()
+
+
+def test_step_profiler_disabled_without_env(monkeypatch):
+    from leap_finetune.training.vlm_embedding import StepProfiler
+
+    monkeypatch.delenv("VLM_EMBEDDING_PROFILE_DIR", raising=False)
+    assert StepProfiler.from_env() is None

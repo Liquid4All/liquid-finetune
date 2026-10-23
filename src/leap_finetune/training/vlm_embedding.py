@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
@@ -14,6 +16,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
+from torch.profiler import ProfilerActivity, profile, record_function
 from transformers import PreTrainedModel, ProcessorMixin, Trainer, TrainingArguments
 
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
@@ -397,6 +400,57 @@ def _restore_rng_state(state: _RngState) -> None:
         torch.cuda.set_rng_state(state.accelerator)
 
 
+class StepProfiler:
+    """Profile a window of optimizer steps on rank 0.
+
+    Enabled by ``VLM_EMBEDDING_PROFILE_DIR``; ``VLM_EMBEDDING_PROFILE_STEPS``
+    (``start:count``, default ``5:3``) picks the window so compilation and
+    allocator warm-up stay outside it. Writes a Chrome trace and kernel/op
+    summary tables.
+    """
+
+    def __init__(self, directory: Path, start: int, steps: int) -> None:
+        if start < 0 or steps <= 0:
+            raise ValueError("profile window needs start >= 0 and steps > 0")
+        self.directory = directory
+        self.start = start
+        self.steps = steps
+        self._profiler: profile | None = None
+
+    @classmethod
+    def from_env(cls) -> StepProfiler | None:
+        directory = os.environ.get("VLM_EMBEDDING_PROFILE_DIR")
+        if not directory or not is_rank_zero():
+            return None
+        start, steps = os.environ.get("VLM_EMBEDDING_PROFILE_STEPS", "5:3").split(":")
+        return cls(Path(directory), int(start), int(steps))
+
+    def on_step(self, step: int) -> None:
+        """Call at the start of each training step with the completed-step count."""
+
+        if step == self.start and self._profiler is None:
+            activities = [ProfilerActivity.CPU]
+            if torch.cuda.is_available():
+                activities.append(ProfilerActivity.CUDA)
+            self._profiler = profile(activities=activities)
+            self._profiler.__enter__()
+        elif step == self.start + self.steps and self._profiler is not None:
+            self.close()
+
+    def close(self) -> None:
+        if self._profiler is None:
+            return
+        profiler, self._profiler = self._profiler, None
+        profiler.__exit__(None, None, None)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        profiler.export_chrome_trace(str(self.directory / "trace.json"))
+        averages = profiler.key_averages()
+        for key in ("self_cuda_time_total", "cuda_time_total", "cpu_time_total"):
+            (self.directory / f"{key}.txt").write_text(
+                averages.table(sort_by=key, row_limit=60), encoding="utf-8"
+            )
+
+
 class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
     """Exact logical-batch InfoNCE with memory-bounded gradient replay."""
 
@@ -404,6 +458,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
     distill_weight: float = 0.0
     teacher_temperature: float = 0.02
     _loss_metrics: dict[str, float] = {}
+    _profiler: StepProfiler | None = None
 
     def __init__(
         self,
@@ -443,11 +498,14 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             processor, workers=collate_workers, max_text_tokens=max_text_tokens
         )
         self._last_step_metrics: dict[str, float] = {}
+        self._profiler = StepProfiler.from_env()
 
     def train(self, *args: Any, **kwargs: Any) -> Any:
         try:
             return super().train(*args, **kwargs)
         finally:
+            if self._profiler is not None:
+                self._profiler.close()
             self._chunk_collator.close()
 
     def log(self, logs: dict[str, float], *args: Any, **kwargs: Any) -> None:
@@ -590,6 +648,8 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         if not samples:
             raise ValueError("cached VLM embedding training needs raw samples")
 
+        if self._profiler is not None:
+            self._profiler.on_step(self.state.global_step)
         started = time.perf_counter()
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
@@ -621,7 +681,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             "positive": [],
             "negative": [],
         }
-        with torch.no_grad():
+        with torch.no_grad(), record_function("vlm/cache_pass"):
             for _ in chunks:
                 batch = next_batch()
                 batches.append(batch)
@@ -636,14 +696,16 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             [torch.cat(cached_by_role[role], dim=0) for role in _EMBEDDING_ROLES],
             dim=1,
         )
-        if distributed:
-            global_rows, offset = gather_rank_rows(local)
-            metadata = gather_rank_metadata(samples)
-        else:
-            global_rows, offset, metadata = local, 0, samples
+        with record_function("vlm/gather"):
+            if distributed:
+                global_rows, offset = gather_rank_rows(local)
+                metadata = gather_rank_metadata(samples)
+            else:
+                global_rows, offset, metadata = local, 0, samples
         cached = global_rows.detach().requires_grad_()
-        loss = self._objective(cached, metadata)
-        loss.backward()
+        with record_function("vlm/objective"):
+            loss = self._objective(cached, metadata)
+            loss.backward()
         local_gradients = cast(torch.Tensor, cached.grad)[
             offset : offset + len(samples)
         ].detach()
@@ -655,7 +717,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         offset = 0
         for chunk, batch, rng_state in zip(chunks, batches, rng_states, strict=True):
             _restore_rng_state(rng_state)
-            with self.compute_loss_context_manager():
+            with record_function("vlm/replay"), self.compute_loss_context_manager():
                 embeddings = self._encode_chunk(model, batch)
                 end = offset + len(chunk)
                 surrogate = sum(
@@ -692,26 +754,29 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
     ) -> torch.Tensor:
         encoded: list[torch.Tensor] = []
         for batch in batches:
-            with self.compute_loss_context_manager():
+            with record_function("vlm/encode"), self.compute_loss_context_manager():
                 embeddings = self._encode_chunk(model, batch)
             encoded.append(
                 torch.stack([embeddings[role] for role in _EMBEDDING_ROLES], dim=1)
             )
         local = torch.cat(encoded)
-        if distributed:
-            global_rows, offset = gather_rank_rows(local.detach())
-            global_rows = torch.cat(
-                [
-                    global_rows[:offset].to(local.device),
-                    local,
-                    global_rows[offset + len(samples) :].to(local.device),
-                ]
-            )
-            metadata = gather_rank_metadata(samples)
-        else:
-            global_rows, metadata = local, samples
-        loss = self._objective(global_rows, metadata)
-        self.accelerator.backward(loss)
+        with record_function("vlm/gather"):
+            if distributed:
+                global_rows, offset = gather_rank_rows(local.detach())
+                global_rows = torch.cat(
+                    [
+                        global_rows[:offset].to(local.device),
+                        local,
+                        global_rows[offset + len(samples) :].to(local.device),
+                    ]
+                )
+                metadata = gather_rank_metadata(samples)
+            else:
+                global_rows, metadata = local, samples
+        with record_function("vlm/objective"):
+            loss = self._objective(global_rows, metadata)
+        with record_function("vlm/backward"):
+            self.accelerator.backward(loss)
         return self._finish_step(
             model,
             loss,
@@ -734,13 +799,14 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         distributed: bool,
     ) -> torch.Tensor:
         if distributed:
-            all_reduce_gradients(
-                [
-                    parameter
-                    for parameter in model.parameters()
-                    if parameter.requires_grad
-                ]
-            )
+            with record_function("vlm/all_reduce"):
+                all_reduce_gradients(
+                    [
+                        parameter
+                        for parameter in model.parameters()
+                        if parameter.requires_grad
+                    ]
+                )
         self._last_step_metrics = _step_metrics(
             started=started,
             cache_seconds=cache_seconds,
