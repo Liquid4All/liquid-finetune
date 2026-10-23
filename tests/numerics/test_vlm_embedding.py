@@ -28,6 +28,7 @@ from leap_finetune.training.vlm_embedding import (
     CachedLFMVLMEmbeddingTrainer,
     configure_gradient_checkpointing,
     contrastive_embedding_loss,
+    distillation_loss,
     LFMVLMEmbeddingTrainer,
     pool_last_attended_token,
     pool_mean_attended_tokens,
@@ -259,6 +260,8 @@ def test_registered_vlm_embedding_defaults_use_cached_logical_batch():
     assert registered["gradient_checkpointing_scope"]["default"] == "auto"
     assert registered["tracker"]["default"] == "wandb"
     assert registered["lr_scheduler"]["default"] == "linear"
+    assert registered["distill_weight"]["default"] == 0.0
+    assert registered["teacher_embeddings"]["default"] == "none"
 
 
 def test_dittopilot_vlm_embedding_exposes_memory_and_tracking_controls():
@@ -783,3 +786,65 @@ def test_per_device_batch_size_splits_global_batch(global_size, world, expected)
 def test_per_device_batch_size_rejects_uneven_split():
     with pytest.raises(ValueError, match="divisible"):
         per_device_batch_size(512, 3)
+
+
+def _unit(rows: int, dim: int, seed: int) -> torch.Tensor:
+    generator = torch.Generator().manual_seed(seed)
+    return torch.nn.functional.normalize(
+        torch.randn(rows, dim, generator=generator), dim=-1
+    )
+
+
+def test_distillation_loss_is_zero_when_student_matches_teacher():
+    q, p, n = _unit(4, 8, 0), _unit(4, 8, 1), _unit(4, 8, 2)
+    loss = distillation_loss(
+        q, p, n, q, p, n, temperature=0.05, teacher_temperature=0.05
+    )
+    assert loss.abs().item() < 1e-6
+
+
+def test_distillation_loss_accepts_wider_teacher_and_has_gradient():
+    q = _unit(4, 8, 0).requires_grad_()
+    p, n = _unit(4, 8, 1), _unit(4, 8, 2)
+    tq, tp, tn = _unit(4, 32, 3), _unit(4, 32, 4), _unit(4, 32, 5)
+    loss = distillation_loss(
+        q, p, n, tq, tp, tn, temperature=0.05, teacher_temperature=0.02
+    )
+    loss.backward()
+    assert loss.item() > 0
+    assert q.grad is not None and q.grad.abs().sum() > 0
+
+
+def test_distillation_loss_ignores_masked_candidates():
+    q, p, n = _unit(2, 8, 0), _unit(2, 8, 1), _unit(2, 8, 2)
+    tq, tp, tn = _unit(2, 16, 3), _unit(2, 16, 4), _unit(2, 16, 5)
+    mask = torch.ones(2, 4, dtype=torch.bool)
+    mask[:, 3] = False
+    changed_n, changed_tn = n.clone(), tn.clone()
+    changed_n[1] = _unit(1, 8, 9)[0]
+    changed_tn[1] = _unit(1, 16, 10)[0]
+
+    def loss(student_negative, teacher_negative):
+        return distillation_loss(
+            q,
+            p,
+            student_negative,
+            tq,
+            tp,
+            teacher_negative,
+            temperature=0.05,
+            teacher_temperature=0.05,
+            candidate_mask=mask,
+        )
+
+    assert torch.isfinite(loss(n, tn))
+    assert torch.allclose(loss(n, tn), loss(changed_n, changed_tn))
+
+
+def test_dittopilot_exposes_distillation_controls():
+    root = Path(__file__).parents[2]
+    runner = (root / "dittopilot" / "run_vlm_embedding.sh").read_text()
+
+    assert 'teacher_embeddings: "${TEACHER_EMBEDDINGS}"' in runner
+    assert "distill_weight: ${DISTILL_WEIGHT}" in runner
+    assert "teacher_temperature: ${TEACHER_TEMPERATURE}" in runner

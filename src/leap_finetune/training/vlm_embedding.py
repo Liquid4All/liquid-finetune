@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any, cast
 
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -59,6 +60,9 @@ _RUNTIME_KEYS = {
     "retain_graphs",
     "sort_rows",
     "temperature",
+    "teacher_embeddings",
+    "distill_weight",
+    "teacher_temperature",
 }
 
 _EMBEDDING_ROLES = ("query", "positive", "negative")
@@ -70,6 +74,7 @@ _MASK_FIELDS = (
     "candidate_group",
     "loss_group",
     "modality",
+    "teacher",
 )
 
 _GRADIENT_CHECKPOINTING_COMPONENTS = {
@@ -155,6 +160,57 @@ def contrastive_embedding_loss(
         logits = logits.masked_fill(~candidate_mask, torch.finfo(logits.dtype).min)
     labels = torch.arange(query.shape[0], device=query.device)
     return F.cross_entropy(logits / temperature, labels)
+
+
+def _masked_logits(
+    query: torch.Tensor,
+    positive: torch.Tensor,
+    negative: torch.Tensor,
+    temperature: float,
+    candidate_mask: torch.Tensor | None,
+) -> torch.Tensor:
+    logits = query @ torch.cat((positive, negative), dim=0).transpose(0, 1)
+    logits = logits / temperature
+    if candidate_mask is not None:
+        mask = candidate_mask.to(device=logits.device, dtype=torch.bool)
+        logits = logits.masked_fill(~mask, torch.finfo(logits.dtype).min)
+    return logits
+
+
+def distillation_loss(
+    query: torch.Tensor,
+    positive: torch.Tensor,
+    negative: torch.Tensor,
+    teacher_query: torch.Tensor,
+    teacher_positive: torch.Tensor,
+    teacher_negative: torch.Tensor,
+    *,
+    temperature: float,
+    teacher_temperature: float,
+    candidate_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """KL(teacher || student) between in-batch candidate distributions.
+
+    Both distributions span the same masked candidates, so the teacher's
+    embedding width need not match the student's.
+    """
+
+    if temperature <= 0 or teacher_temperature <= 0:
+        raise ValueError("temperatures must be positive")
+    student = _masked_logits(query, positive, negative, temperature, candidate_mask)
+    teacher = _masked_logits(
+        teacher_query.to(student),
+        teacher_positive.to(student),
+        teacher_negative.to(student),
+        teacher_temperature,
+        candidate_mask,
+    )
+    return F.kl_div(
+        F.log_softmax(student.float(), dim=-1),
+        F.log_softmax(teacher.float(), dim=-1),
+        log_target=True,
+        reduction="batchmean",
+    )
 
 
 def _is_distributed() -> bool:
@@ -344,6 +400,11 @@ def _restore_rng_state(state: _RngState) -> None:
 class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
     """Exact logical-batch InfoNCE with memory-bounded gradient replay."""
 
+    teacher: np.ndarray | None = None
+    distill_weight: float = 0.0
+    teacher_temperature: float = 0.02
+    _loss_metrics: dict[str, float] = {}
+
     def __init__(
         self,
         *,
@@ -353,11 +414,26 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         sort_rows: bool = True,
         retain_graphs: bool = False,
         max_text_tokens: int | None = None,
+        teacher_embeddings: str | None = None,
+        distill_weight: float = 0.0,
+        teacher_temperature: float = 0.02,
         **kwargs: Any,
     ) -> None:
         if micro_batch_size <= 0:
             raise ValueError("micro_batch_size must be positive")
+        if distill_weight < 0:
+            raise ValueError("distill_weight must be non-negative")
+        if distill_weight > 0 and not teacher_embeddings:
+            raise ValueError("distill_weight > 0 requires teacher_embeddings")
         super().__init__(**kwargs)
+        self.teacher = (
+            np.load(teacher_embeddings, mmap_mode="r")
+            if teacher_embeddings and distill_weight > 0
+            else None
+        )
+        self.distill_weight = distill_weight
+        self.teacher_temperature = teacher_temperature
+        self._loss_metrics: dict[str, float] = {}
         self.micro_batch_size = micro_batch_size
         self.sort_rows = sort_rows
         self.retain_graphs = retain_graphs
@@ -439,6 +515,53 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             for role in ("query", "positive", "negative")
         }
 
+    def _teacher_rows(
+        self, metadata: list[dict[str, Any]], device: torch.device
+    ) -> torch.Tensor:
+        indices = np.array(
+            [
+                [int(row["teacher"][role]) for role in _EMBEDDING_ROLES]
+                for row in metadata
+            ]
+        )
+        order, inverse = np.unique(indices.reshape(-1), return_inverse=True)
+        vectors = torch.from_numpy(np.asarray(self.teacher[order], dtype=np.float32))
+        return vectors[torch.from_numpy(inverse)].view(*indices.shape, -1).to(device)
+
+    def _objective(
+        self, rows: torch.Tensor, metadata: list[dict[str, Any]]
+    ) -> torch.Tensor:
+        """InfoNCE over the global batch, plus weighted teacher KL when configured."""
+
+        mask = build_candidate_mask(metadata)
+        contrastive = contrastive_embedding_loss(
+            rows[:, 0],
+            rows[:, 1],
+            rows[:, 2],
+            temperature=self.embedding_temperature,
+            candidate_mask=mask,
+        )
+        if self.teacher is None:
+            self._loss_metrics = {}
+            return contrastive
+        teacher = self._teacher_rows(metadata, rows.device)
+        distill = distillation_loss(
+            rows[:, 0],
+            rows[:, 1],
+            rows[:, 2],
+            teacher[:, 0],
+            teacher[:, 1],
+            teacher[:, 2],
+            temperature=self.embedding_temperature,
+            teacher_temperature=self.teacher_temperature,
+            candidate_mask=mask,
+        )
+        self._loss_metrics = {
+            "loss/contrastive": float(contrastive.detach()),
+            "loss/distill": float(distill.detach()),
+        }
+        return contrastive + self.distill_weight * distill
+
     def training_step(
         self,
         model: nn.Module,
@@ -519,13 +642,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         else:
             global_rows, offset, metadata = local, 0, samples
         cached = global_rows.detach().requires_grad_()
-        loss = contrastive_embedding_loss(
-            cached[:, 0],
-            cached[:, 1],
-            cached[:, 2],
-            temperature=self.embedding_temperature,
-            candidate_mask=build_candidate_mask(metadata),
-        )
+        loss = self._objective(cached, metadata)
         loss.backward()
         local_gradients = cast(torch.Tensor, cached.grad)[
             offset : offset + len(samples)
@@ -593,13 +710,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             metadata = gather_rank_metadata(samples)
         else:
             global_rows, metadata = local, samples
-        loss = contrastive_embedding_loss(
-            global_rows[:, 0],
-            global_rows[:, 1],
-            global_rows[:, 2],
-            temperature=self.embedding_temperature,
-            candidate_mask=build_candidate_mask(metadata),
-        )
+        loss = self._objective(global_rows, metadata)
         self.accelerator.backward(loss)
         return self._finish_step(
             model,
@@ -636,6 +747,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             collate_wait=collate_wait,
             rows=rows,
         )
+        self._last_step_metrics.update(self._loss_metrics)
         if is_rank_zero():
             print(
                 json.dumps({"vlm_embedding_step": self._last_step_metrics}), flush=True
@@ -790,8 +902,13 @@ def vlm_embedding_run(
             retain_graphs=bool(train_config.get("retain_graphs", False)),
             max_text_tokens=max_text_tokens,
             data_collator=collate_raw_vlm_embedding_samples,
+            teacher_embeddings=train_config.get("teacher_embeddings") or None,
+            distill_weight=float(train_config.get("distill_weight", 0.0)),
+            teacher_temperature=float(train_config.get("teacher_temperature", 0.02)),
         )
     else:
+        if float(train_config.get("distill_weight", 0.0)) > 0:
+            raise ValueError("distillation requires cached_loss")
         trainer_kwargs["data_collator"] = create_vlm_embedding_collate_fn(
             processor, max_text_tokens
         )

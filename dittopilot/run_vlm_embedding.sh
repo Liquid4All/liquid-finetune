@@ -22,6 +22,9 @@ MAX_IMAGE_TOKENS="256"
 MIN_IMAGE_TOKENS="64"
 POOLING="last"
 LR_SCHEDULER="linear"
+TEACHER_EMBEDDINGS=""
+DISTILL_WEIGHT="0"
+TEACHER_TEMPERATURE="0.02"
 LORA_RANK="64"
 LORA_ALPHA="64"
 WARMUP_RATIO="0.05"
@@ -53,6 +56,9 @@ while (($#)); do
     --min-image-tokens) MIN_IMAGE_TOKENS="$2"; shift 2 ;;
     --pooling) POOLING="$2"; shift 2 ;;
     --lr-scheduler) LR_SCHEDULER="$2"; shift 2 ;;
+    --teacher-embeddings) TEACHER_EMBEDDINGS="$2"; shift 2 ;;
+    --distill-weight) DISTILL_WEIGHT="$2"; shift 2 ;;
+    --teacher-temperature) TEACHER_TEMPERATURE="$2"; shift 2 ;;
     --lora-rank) LORA_RANK="$2"; shift 2 ;;
     --lora-alpha) LORA_ALPHA="$2"; shift 2 ;;
     --warmup-ratio) WARMUP_RATIO="$2"; shift 2 ;;
@@ -76,6 +82,13 @@ case "${LR_SCHEDULER}" in
   linear|cosine|constant_with_warmup) ;;
   *) echo "lr-scheduler must be linear, cosine, or constant_with_warmup" >&2; exit 2 ;;
 esac
+if [[ "${TEACHER_EMBEDDINGS}" == "none" ]]; then
+  TEACHER_EMBEDDINGS=""
+fi
+if [[ -n "${TEACHER_EMBEDDINGS}" && ! -f "${TEACHER_EMBEDDINGS}" ]]; then
+  echo "teacher-embeddings file not found: ${TEACHER_EMBEDDINGS}" >&2
+  exit 2
+fi
 if ! [[ "${MIN_IMAGE_TOKENS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "min-image-tokens must be a positive integer" >&2
   exit 2
@@ -176,6 +189,9 @@ training_config:
   seed: ${SEED}
   data_seed: ${SEED}
   temperature: ${TEMPERATURE}
+  teacher_embeddings: "${TEACHER_EMBEDDINGS}"
+  distill_weight: ${DISTILL_WEIGHT}
+  teacher_temperature: ${TEACHER_TEMPERATURE}
   max_image_tokens: ${MAX_IMAGE_TOKENS}
   min_image_tokens: ${MIN_IMAGE_TOKENS}
   pooling: "${POOLING}"

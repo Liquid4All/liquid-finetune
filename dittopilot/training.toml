@@ -2,7 +2,7 @@
 description = "Native-dimension assistant-prefix contrastive adaptation for generative vision-language checkpoints."
 mode = "adapter"
 modality = "image"
-command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --micro-batch-size {{micro_batch_size}} --collate-workers {{collate_workers}} --cached-loss {{cached_loss}} --sort-rows {{sort_rows}} --retain-graphs {{retain_graphs}} --max-text-tokens {{max_text_tokens}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --gradient-checkpointing {{gradient_checkpointing}} --gradient-checkpointing-scope {{gradient_checkpointing_scope}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --min-image-tokens {{min_image_tokens}} --pooling {{pooling}} --lr-scheduler {{lr_scheduler}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --tracker {{tracker}} --seed {{seed}}"
+command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --micro-batch-size {{micro_batch_size}} --collate-workers {{collate_workers}} --cached-loss {{cached_loss}} --sort-rows {{sort_rows}} --retain-graphs {{retain_graphs}} --max-text-tokens {{max_text_tokens}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --gradient-checkpointing {{gradient_checkpointing}} --gradient-checkpointing-scope {{gradient_checkpointing_scope}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --min-image-tokens {{min_image_tokens}} --pooling {{pooling}} --lr-scheduler {{lr_scheduler}} --teacher-embeddings {{teacher_embeddings}} --distill-weight {{distill_weight}} --teacher-temperature {{teacher_temperature}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --tracker {{tracker}} --seed {{seed}}"
 gpus = 1
 cpus = 32
 nodes = 1
@@ -46,6 +46,21 @@ description = "Sort each rank's rows by image roles and text length before chunk
 type = "str"
 default = "false"
 description = "Keep every micro-batch's autograd graph and backpropagate the gathered loss once instead of replaying a cache pass; exact, trades HBM for one fewer forward. true or false."
+
+[vlm_embedding.args.teacher_embeddings]
+type = "str"
+default = "none"
+description = "Float16 [items, dim] .npy of L2-normalized teacher embeddings indexed by each row's teacher.{query,positive,negative}; none disables distillation."
+
+[vlm_embedding.args.distill_weight]
+type = "float"
+default = 0.0
+description = "Weight of KL(teacher || student) over in-batch candidate distributions, added to InfoNCE."
+
+[vlm_embedding.args.teacher_temperature]
+type = "float"
+default = 0.02
+description = "Softmax temperature applied to teacher similarities."
 
 [vlm_embedding.args.lr_scheduler]
 type = "str"
