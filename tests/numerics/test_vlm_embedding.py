@@ -256,6 +256,7 @@ def test_registered_vlm_embedding_defaults_use_cached_logical_batch():
     assert registered["save_steps"]["default"] == 10
     assert registered["gradient_accumulation_steps"]["default"] == 1
     assert registered["collate_workers"]["default"] == 16
+    assert registered["collate_backend"]["default"] == "thread"
     assert registered["gradient_checkpointing"]["default"] == "false"
     assert registered["gradient_checkpointing_scope"]["default"] == "auto"
     assert registered["tracker"]["default"] == "wandb"
@@ -870,3 +871,15 @@ def test_step_profiler_disabled_without_env(monkeypatch):
 
     monkeypatch.delenv("VLM_EMBEDDING_PROFILE_DIR", raising=False)
     assert StepProfiler.from_env() is None
+
+
+def test_dittopilot_exposes_collate_backend():
+    root = Path(__file__).parents[2]
+    runner = (root / "dittopilot" / "run_vlm_embedding.sh").read_text()
+    registered = tomllib.loads((root / "dittopilot" / "training.toml").read_text())
+
+    assert 'collate_backend: "${COLLATE_BACKEND}"' in runner
+    assert (
+        "--collate-backend {{collate_backend}}"
+        in registered["vlm_embedding"]["command"]
+    )

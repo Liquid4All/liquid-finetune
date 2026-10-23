@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 _RUNTIME_KEYS = {
     "adapter_path",
     "cached_loss",
+    "collate_backend",
     "collate_workers",
     "do_image_splitting",
     "global_batch_size",
@@ -466,6 +467,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         processor: Any,
         micro_batch_size: int,
         collate_workers: int = 0,
+        collate_backend: str = "thread",
         sort_rows: bool = True,
         retain_graphs: bool = False,
         max_text_tokens: int | None = None,
@@ -495,7 +497,10 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         self._lookahead: dict[str, Any] | None = None
         self._plans: dict[int, _StepPlan] = {}
         self._chunk_collator = OrderedChunkCollator(
-            processor, workers=collate_workers, max_text_tokens=max_text_tokens
+            processor,
+            workers=collate_workers,
+            backend=collate_backend,
+            max_text_tokens=max_text_tokens,
         )
         self._last_step_metrics: dict[str, float] = {}
         self._profiler = StepProfiler.from_env()
@@ -881,6 +886,7 @@ def vlm_embedding_run(
     cached_loss = bool(train_config.get("cached_loss", False))
     micro_batch_size = int(train_config.get("micro_batch_size", 32))
     collate_workers = int(train_config.get("collate_workers", 0))
+    collate_backend = str(train_config.get("collate_backend", "thread"))
     checkpointing_scope = train_config.get("gradient_checkpointing_scope", "auto")
 
     filtered, _ = filter_runtime_config_kwargs(
@@ -964,6 +970,7 @@ def vlm_embedding_run(
             processor=processor,
             micro_batch_size=micro_batch_size,
             collate_workers=collate_workers,
+            collate_backend=collate_backend,
             sort_rows=bool(train_config.get("sort_rows", True)),
             retain_graphs=bool(train_config.get("retain_graphs", False)),
             max_text_tokens=max_text_tokens,
