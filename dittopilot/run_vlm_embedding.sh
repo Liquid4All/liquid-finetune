@@ -10,6 +10,7 @@ BATCH_SIZE="8192"
 MICRO_BATCH_SIZE="32"
 COLLATE_WORKERS="0"
 COLLATE_BACKEND="thread"
+TEXT_ATTN_IMPLEMENTATION="sdpa"
 CACHED_LOSS="true"
 SORT_ROWS="true"
 RETAIN_GRAPHS="false"
@@ -45,6 +46,7 @@ while (($#)); do
     --micro-batch-size) MICRO_BATCH_SIZE="$2"; shift 2 ;;
     --collate-workers) COLLATE_WORKERS="$2"; shift 2 ;;
     --collate-backend) COLLATE_BACKEND="$2"; shift 2 ;;
+    --text-attn-implementation) TEXT_ATTN_IMPLEMENTATION="$2"; shift 2 ;;
     --cached-loss) CACHED_LOSS="$2"; shift 2 ;;
     --sort-rows) SORT_ROWS="$2"; shift 2 ;;
     --retain-graphs) RETAIN_GRAPHS="$2"; shift 2 ;;
@@ -106,6 +108,10 @@ fi
 case "${COLLATE_BACKEND}" in
   thread|process) ;;
   *) echo "collate-backend must be thread or process" >&2; exit 2 ;;
+esac
+case "${TEXT_ATTN_IMPLEMENTATION}" in
+  sdpa|flash_attention_2) ;;
+  *) echo "text-attn-implementation must be sdpa or flash_attention_2" >&2; exit 2 ;;
 esac
 case "${CACHED_LOSS}" in
   true|false) ;;
@@ -182,6 +188,7 @@ training_config:
   micro_batch_size: ${MICRO_BATCH_SIZE}
   collate_workers: ${COLLATE_WORKERS}
   collate_backend: "${COLLATE_BACKEND}"
+  text_attn_implementation: "${TEXT_ATTN_IMPLEMENTATION}"
   cached_loss: ${CACHED_LOSS}
   sort_rows: ${SORT_ROWS}
   retain_graphs: ${RETAIN_GRAPHS}

@@ -883,3 +883,55 @@ def test_dittopilot_exposes_collate_backend():
         "--collate-backend {{collate_backend}}"
         in registered["vlm_embedding"]["command"]
     )
+
+
+def test_count_inputs_sums_attended_tokens_and_tiles():
+    from leap_finetune.training.vlm_embedding import CachedLFMVLMEmbeddingTrainer
+
+    trainer = CachedLFMVLMEmbeddingTrainer.__new__(CachedLFMVLMEmbeddingTrainer)
+    trainer._step_tokens, trainer._step_tiles = 0, 0
+    mask = torch.tensor([[0, 1, 1], [1, 1, 1]])
+    batch = {
+        "query": {"attention_mask": mask},
+        "positive": {"attention_mask": mask, "pixel_values": torch.zeros(3, 4, 2)},
+        "negative": {"attention_mask": mask, "pixel_values": torch.zeros(2, 4, 2)},
+    }
+    trainer._count_inputs(batch)
+    trainer._count_inputs(batch)
+    assert trainer._step_tokens == 2 * 3 * 5
+    assert trainer._step_tiles == 2 * 5
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("sdpa", "sdpa"),
+        (
+            "flash_attention_2",
+            {"text_config": "flash_attention_2", "vision_config": "sdpa"},
+        ),
+    ],
+)
+def test_load_vlm_model_keeps_vision_on_sdpa(monkeypatch, text, expected):
+    import leap_finetune.checkpointing.model_loading as loading
+
+    seen = {}
+
+    class _Model:
+        config = types.SimpleNamespace(use_cache=True)
+
+        @staticmethod
+        def from_pretrained(model_id, **kwargs):
+            seen.update(kwargs)
+            return _Model()
+
+    monkeypatch.setattr(loading, "AutoModelForImageTextToText", _Model)
+    monkeypatch.setattr(
+        loading.AutoProcessor, "from_pretrained", staticmethod(lambda *a, **k: object())
+    )
+    monkeypatch.setattr(loading, "_resolve_model_id", lambda name: name)
+    try:
+        loading.load_vlm_model("model", text_attn_implementation=text)
+    except Exception:
+        pass
+    assert seen["attn_implementation"] == expected

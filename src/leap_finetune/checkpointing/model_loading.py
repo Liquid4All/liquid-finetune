@@ -302,8 +302,13 @@ def load_vlm_model(
     min_image_tokens: int | None = None,
     max_image_tokens: int | None = None,
     do_image_splitting: bool = True,
+    text_attn_implementation: str = "sdpa",
 ) -> tuple[AutoModelForImageTextToText, AutoProcessor]:
-    """Load a VLM model from the Hugging Face Hub or from a local path."""
+    """Load a VLM model from the Hugging Face Hub or from a local path.
+
+    ``text_attn_implementation`` selects the language model's attention; the
+    SigLIP2 vision encoder has no FA2 support and always uses SDPA.
+    """
 
     processor_kwargs = {
         "trust_remote_code": True,
@@ -317,12 +322,16 @@ def load_vlm_model(
     model_id = _resolve_model_id(model_name)
     logger.info(f"Loading VLM: {model_id}")
 
-    # SigLIP2 vision encoder doesn't support FA2, use SDPA for the full VLM
+    attn_implementation: str | dict[str, str] = (
+        "sdpa"
+        if text_attn_implementation == "sdpa"
+        else {"text_config": text_attn_implementation, "vision_config": "sdpa"}
+    )
     model = AutoModelForImageTextToText.from_pretrained(
         model_id,
         dtype=torch.bfloat16,
         trust_remote_code=True,
-        attn_implementation="sdpa",
+        attn_implementation=attn_implementation,
     )
     processor = AutoProcessor.from_pretrained(model_id, **processor_kwargs)
 

@@ -67,6 +67,7 @@ _RUNTIME_KEYS = {
     "teacher_embeddings",
     "distill_weight",
     "teacher_temperature",
+    "text_attn_implementation",
 }
 
 _EMBEDDING_ROLES = ("query", "positive", "negative")
@@ -460,6 +461,8 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
     teacher_temperature: float = 0.02
     _loss_metrics: dict[str, float] = {}
     _profiler: StepProfiler | None = None
+    _step_tokens: int = 0
+    _step_tiles: int = 0
 
     def __init__(
         self,
@@ -578,6 +581,16 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             for role in ("query", "positive", "negative")
         }
 
+    def _count_inputs(self, batch: dict[str, Any]) -> None:
+        for role in _EMBEDDING_ROLES:
+            inputs = batch.get(role)
+            if not isinstance(inputs, dict):
+                continue
+            mask = inputs.get("attention_mask")
+            self._step_tokens += 0 if mask is None else int(mask.sum())
+            pixels = inputs.get("pixel_values")
+            self._step_tiles += 0 if pixels is None else int(pixels.shape[0])
+
     def _teacher_rows(
         self, metadata: list[dict[str, Any]], device: torch.device
     ) -> torch.Tensor:
@@ -655,6 +668,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
 
         if self._profiler is not None:
             self._profiler.on_step(self.state.global_step)
+        self._step_tokens, self._step_tiles = 0, 0
         started = time.perf_counter()
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
@@ -667,6 +681,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             waited = time.perf_counter()
             batch = next(collated)
             collate_wait += time.perf_counter() - waited
+            self._count_inputs(batch)
             return batch
 
         if len(chunks) == 1 or self.retain_graphs:
@@ -819,6 +834,8 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             rows=rows,
         )
         self._last_step_metrics.update(self._loss_metrics)
+        self._last_step_metrics["perf/attended_tokens"] = float(self._step_tokens)
+        self._last_step_metrics["perf/image_tiles"] = float(self._step_tiles)
         if is_rank_zero():
             print(
                 json.dumps({"vlm_embedding_step": self._last_step_metrics}), flush=True
@@ -947,6 +964,9 @@ def vlm_embedding_run(
         min_image_tokens=train_config.get("min_image_tokens"),
         max_image_tokens=train_config.get("max_image_tokens"),
         do_image_splitting=train_config.get("do_image_splitting", True),
+        text_attn_implementation=str(
+            train_config.get("text_attn_implementation", "sdpa")
+        ),
     )
     processor_any = cast(Any, processor)
     processor_any.tokenizer.padding_side = "left"
