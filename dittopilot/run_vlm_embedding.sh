@@ -21,6 +21,7 @@ TEMPERATURE="0.02"
 MAX_IMAGE_TOKENS="256"
 MIN_IMAGE_TOKENS="64"
 POOLING="last"
+LR_SCHEDULER="linear"
 LORA_RANK="64"
 LORA_ALPHA="64"
 WARMUP_RATIO="0.05"
@@ -51,6 +52,7 @@ while (($#)); do
     --max-image-tokens) MAX_IMAGE_TOKENS="$2"; shift 2 ;;
     --min-image-tokens) MIN_IMAGE_TOKENS="$2"; shift 2 ;;
     --pooling) POOLING="$2"; shift 2 ;;
+    --lr-scheduler) LR_SCHEDULER="$2"; shift 2 ;;
     --lora-rank) LORA_RANK="$2"; shift 2 ;;
     --lora-alpha) LORA_ALPHA="$2"; shift 2 ;;
     --warmup-ratio) WARMUP_RATIO="$2"; shift 2 ;;
@@ -69,6 +71,10 @@ esac
 case "${POOLING}" in
   last|mean) ;;
   *) echo "pooling must be last or mean" >&2; exit 2 ;;
+esac
+case "${LR_SCHEDULER}" in
+  linear|cosine|constant_with_warmup) ;;
+  *) echo "lr-scheduler must be linear, cosine, or constant_with_warmup" >&2; exit 2 ;;
 esac
 if ! [[ "${MIN_IMAGE_TOKENS}" =~ ^[1-9][0-9]*$ ]]; then
   echo "min-image-tokens must be a positive integer" >&2
@@ -164,6 +170,7 @@ training_config:
   gradient_checkpointing: ${GRADIENT_CHECKPOINTING}
   gradient_checkpointing_scope: "${GRADIENT_CHECKPOINTING_SCOPE}"
   learning_rate: ${LEARNING_RATE}
+  lr_scheduler_type: "${LR_SCHEDULER}"
   warmup_ratio: ${WARMUP_RATIO}
   weight_decay: ${WEIGHT_DECAY}
   seed: ${SEED}

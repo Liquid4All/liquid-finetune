@@ -258,6 +258,7 @@ def test_registered_vlm_embedding_defaults_use_cached_logical_batch():
     assert registered["gradient_checkpointing"]["default"] == "false"
     assert registered["gradient_checkpointing_scope"]["default"] == "auto"
     assert registered["tracker"]["default"] == "wandb"
+    assert registered["lr_scheduler"]["default"] == "linear"
 
 
 def test_dittopilot_vlm_embedding_exposes_memory_and_tracking_controls():
@@ -267,6 +268,8 @@ def test_dittopilot_vlm_embedding_exposes_memory_and_tracking_controls():
     assert "gradient_checkpointing: ${GRADIENT_CHECKPOINTING}" in runner
     assert 'gradient_checkpointing_scope: "${GRADIENT_CHECKPOINTING_SCOPE}"' in runner
     assert 'tracker: "${TRACKER}"' in runner
+    assert 'lr_scheduler_type: "${LR_SCHEDULER}"' in runner
+    assert 'LR_SCHEDULER="linear"' in runner
     assert "micro_batch_size: ${MICRO_BATCH_SIZE}" in runner
     assert "cached_loss: ${CACHED_LOSS}" in runner
     assert "collate_workers: ${COLLATE_WORKERS}" in runner
