@@ -355,7 +355,16 @@ class LFMVLMEmbeddingTrainer(RayDataLoaderMixin, Trainer):
         self.pool = POOLERS[pooling]
 
     def _encode(self, model, batch: dict[str, torch.Tensor]) -> torch.Tensor:
-        outputs = _vlm_backbone(model)(**batch, use_cache=False, return_dict=True)
+        backbone = _vlm_backbone(model)
+        weight = next(backbone.parameters())
+        # Calling the backbone bypasses the autocast that accelerate wraps
+        # around model.forward; fp32 (full fine-tuning) weights need it here.
+        with torch.autocast(
+            weight.device.type,
+            dtype=torch.bfloat16,
+            enabled=weight.dtype == torch.float32,
+        ):
+            outputs = backbone(**batch, use_cache=False, return_dict=True)
         return self.pool(outputs.last_hidden_state, batch["attention_mask"])
 
     def compute_loss(

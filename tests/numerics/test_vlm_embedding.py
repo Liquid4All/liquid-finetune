@@ -984,3 +984,33 @@ def test_dittopilot_exposes_full_fine_tuning():
     assert "use_peft: ${USE_PEFT}" in runner
     assert "*/final/config.json" in runner
     assert registered["vlm_embedding"]["args"]["use_peft"]["default"] == "true"
+
+
+@pytest.mark.parametrize(
+    ("dtype", "autocast"), [(torch.float32, True), (torch.bfloat16, False)]
+)
+def test_encode_autocasts_only_fp32_backbones(dtype, autocast):
+    seen = {}
+
+    class Backbone(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.proj = torch.nn.Linear(4, 4).to(dtype)
+
+        def forward(self, input_ids, attention_mask, use_cache, return_dict):
+            seen["autocast"] = torch.is_autocast_enabled("cpu")
+            hidden = self.proj(input_ids.to(dtype))
+            seen["dtype"] = hidden.dtype
+            return SimpleNamespace(last_hidden_state=hidden)
+
+    model = SimpleNamespace(model=Backbone())
+    trainer = LFMVLMEmbeddingTrainer.__new__(LFMVLMEmbeddingTrainer)
+    trainer.pool = pool_last_attended_token
+    batch = {
+        "input_ids": torch.randn(2, 3, 4),
+        "attention_mask": torch.ones(2, 3, dtype=torch.long),
+    }
+    trainer._encode(model, batch)
+
+    assert seen["autocast"] is autocast
+    assert seen["dtype"] == torch.bfloat16
