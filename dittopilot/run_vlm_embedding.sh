@@ -27,6 +27,8 @@ POOLING="last"
 LR_SCHEDULER="linear"
 TEACHER_EMBEDDINGS=""
 DISTILL_WEIGHT="0"
+FEATURE_DISTILL_WEIGHT="0"
+FEATURE_HEAD_LR="1e-3"
 TEACHER_TEMPERATURE="0.02"
 LORA_RANK="64"
 LORA_ALPHA="64"
@@ -64,6 +66,8 @@ while (($#)); do
     --lr-scheduler) LR_SCHEDULER="$2"; shift 2 ;;
     --teacher-embeddings) TEACHER_EMBEDDINGS="$2"; shift 2 ;;
     --distill-weight) DISTILL_WEIGHT="$2"; shift 2 ;;
+    --feature-distill-weight) FEATURE_DISTILL_WEIGHT="$2"; shift 2 ;;
+    --feature-head-lr) FEATURE_HEAD_LR="$2"; shift 2 ;;
     --teacher-temperature) TEACHER_TEMPERATURE="$2"; shift 2 ;;
     --lora-rank) LORA_RANK="$2"; shift 2 ;;
     --lora-alpha) LORA_ALPHA="$2"; shift 2 ;;
@@ -211,6 +215,8 @@ training_config:
   temperature: ${TEMPERATURE}
   teacher_embeddings: "${TEACHER_EMBEDDINGS}"
   distill_weight: ${DISTILL_WEIGHT}
+  feature_distill_weight: ${FEATURE_DISTILL_WEIGHT}
+  feature_head_lr: ${FEATURE_HEAD_LR}
   teacher_temperature: ${TEACHER_TEMPERATURE}
   max_image_tokens: ${MAX_IMAGE_TOKENS}
   min_image_tokens: ${MIN_IMAGE_TOKENS}

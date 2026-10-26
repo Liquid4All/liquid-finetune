@@ -66,6 +66,8 @@ _RUNTIME_KEYS = {
     "temperature",
     "teacher_embeddings",
     "distill_weight",
+    "feature_distill_weight",
+    "feature_head_lr",
     "teacher_temperature",
     "text_attn_implementation",
 }
@@ -216,6 +218,15 @@ def distillation_loss(
         log_target=True,
         reduction="batchmean",
     )
+
+
+def feature_distillation_loss(
+    student: torch.Tensor, teacher: torch.Tensor, head: nn.Module
+) -> torch.Tensor:
+    """Mean cosine distance between projected student and teacher embeddings."""
+
+    projected = head(student.float())
+    return (1 - F.cosine_similarity(projected, teacher.to(projected), dim=-1)).mean()
 
 
 def _is_distributed() -> bool:
@@ -467,6 +478,8 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
 
     teacher: np.ndarray | None = None
     distill_weight: float = 0.0
+    feature_distill_weight: float = 0.0
+    feature_head: nn.Linear | None = None
     teacher_temperature: float = 0.02
     _loss_metrics: dict[str, float] = {}
     _profiler: StepProfiler | None = None
@@ -485,22 +498,30 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         max_text_tokens: int | None = None,
         teacher_embeddings: str | None = None,
         distill_weight: float = 0.0,
+        feature_distill_weight: float = 0.0,
+        feature_head_lr: float = 1e-3,
         teacher_temperature: float = 0.02,
         **kwargs: Any,
     ) -> None:
         if micro_batch_size <= 0:
             raise ValueError("micro_batch_size must be positive")
-        if distill_weight < 0:
-            raise ValueError("distill_weight must be non-negative")
-        if distill_weight > 0 and not teacher_embeddings:
-            raise ValueError("distill_weight > 0 requires teacher_embeddings")
+        if distill_weight < 0 or feature_distill_weight < 0:
+            raise ValueError("distillation weights must be non-negative")
+        distilling = distill_weight > 0 or feature_distill_weight > 0
+        if distilling and not teacher_embeddings:
+            raise ValueError("distillation requires teacher_embeddings")
         super().__init__(**kwargs)
         self.teacher = (
             np.load(teacher_embeddings, mmap_mode="r")
-            if teacher_embeddings and distill_weight > 0
+            if teacher_embeddings and distilling
             else None
         )
         self.distill_weight = distill_weight
+        self.feature_distill_weight = feature_distill_weight
+        self.feature_head_lr = feature_head_lr
+        self.feature_head = (
+            self._build_feature_head() if feature_distill_weight > 0 else None
+        )
         self.teacher_temperature = teacher_temperature
         self._loss_metrics: dict[str, float] = {}
         self.micro_batch_size = micro_batch_size
@@ -516,6 +537,39 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         )
         self._last_step_metrics: dict[str, float] = {}
         self._profiler = StepProfiler.from_env()
+
+    def _build_feature_head(self) -> nn.Linear:
+        """Training-only student->teacher projection, identical on every rank.
+
+        Every rank evaluates the same global-batch loss, so the head sees the
+        full gradient locally; it is averaged rather than summed across ranks
+        and stays outside the model, so checkpoints are unchanged.
+        """
+
+        assert self.teacher is not None
+        width = int(_vlm_backbone(self.model).config.text_config.hidden_size)
+        head = nn.Linear(width, int(self.teacher.shape[1]), bias=False)
+        generator = torch.Generator().manual_seed(int(self.args.seed))
+        with torch.no_grad():
+            head.weight.copy_(
+                torch.randn(head.weight.shape, generator=generator) / math.sqrt(width)
+            )
+        return head.to(self.args.device)
+
+    def create_optimizer(self, model: nn.Module | None = None) -> Any:
+        optimizer = super().create_optimizer(model)
+        if self.feature_head is not None and not any(
+            group.get("name") == "feature_head" for group in optimizer.param_groups
+        ):
+            optimizer.add_param_group(
+                {
+                    "params": list(self.feature_head.parameters()),
+                    "lr": self.feature_head_lr,
+                    "weight_decay": 0.0,
+                    "name": "feature_head",
+                }
+            )
+        return optimizer
 
     def train(self, *args: Any, **kwargs: Any) -> Any:
         try:
@@ -630,22 +684,27 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             self._loss_metrics = {}
             return contrastive
         teacher = self._teacher_rows(metadata, rows.device)
-        distill = distillation_loss(
-            rows[:, 0],
-            rows[:, 1],
-            rows[:, 2],
-            teacher[:, 0],
-            teacher[:, 1],
-            teacher[:, 2],
-            temperature=self.embedding_temperature,
-            teacher_temperature=self.teacher_temperature,
-            candidate_mask=mask,
-        )
-        self._loss_metrics = {
-            "loss/contrastive": float(contrastive.detach()),
-            "loss/distill": float(distill.detach()),
-        }
-        return contrastive + self.distill_weight * distill
+        loss = contrastive
+        self._loss_metrics = {"loss/contrastive": float(contrastive.detach())}
+        if self.distill_weight > 0:
+            distill = distillation_loss(
+                rows[:, 0],
+                rows[:, 1],
+                rows[:, 2],
+                teacher[:, 0],
+                teacher[:, 1],
+                teacher[:, 2],
+                temperature=self.embedding_temperature,
+                teacher_temperature=self.teacher_temperature,
+                candidate_mask=mask,
+            )
+            self._loss_metrics["loss/distill"] = float(distill.detach())
+            loss = loss + self.distill_weight * distill
+        if self.feature_head is not None:
+            feature = feature_distillation_loss(rows, teacher, self.feature_head)
+            self._loss_metrics["loss/feature"] = float(feature.detach())
+            loss = loss + self.feature_distill_weight * feature
+        return loss
 
     def training_step(
         self,
@@ -669,6 +728,9 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         model = _unwrap_data_parallel(model)
         distributed = _is_distributed()
         model.train()
+        if self.feature_head is not None:
+            # The Trainer only zeroes model gradients between steps.
+            self.feature_head.zero_grad(set_to_none=True)
         if hasattr(self.optimizer, "train") and callable(self.optimizer.train):
             self.optimizer.train()
         samples = cast(list[dict[str, Any]], inputs.get("samples"))
@@ -836,6 +898,11 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
                         if parameter.requires_grad
                     ]
                 )
+                if self.feature_head is not None:
+                    head = list(self.feature_head.parameters())
+                    all_reduce_gradients(head)
+                    for parameter in head:
+                        cast(torch.Tensor, parameter.grad).div_(dist.get_world_size())
         self._last_step_metrics = _step_metrics(
             started=started,
             cache_seconds=cache_seconds,
@@ -1009,10 +1076,17 @@ def vlm_embedding_run(
             data_collator=collate_raw_vlm_embedding_samples,
             teacher_embeddings=train_config.get("teacher_embeddings") or None,
             distill_weight=float(train_config.get("distill_weight", 0.0)),
+            feature_distill_weight=float(
+                train_config.get("feature_distill_weight", 0.0)
+            ),
+            feature_head_lr=float(train_config.get("feature_head_lr", 1e-3)),
             teacher_temperature=float(train_config.get("teacher_temperature", 0.02)),
         )
     else:
-        if float(train_config.get("distill_weight", 0.0)) > 0:
+        if (
+            float(train_config.get("distill_weight", 0.0)) > 0
+            or float(train_config.get("feature_distill_weight", 0.0)) > 0
+        ):
             raise ValueError("distillation requires cached_loss")
         trainer_kwargs["data_collator"] = create_vlm_embedding_collate_fn(
             processor, max_text_tokens

@@ -6,6 +6,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
 from datasets import Dataset
@@ -262,6 +263,8 @@ def test_registered_vlm_embedding_defaults_use_cached_logical_batch():
     assert registered["tracker"]["default"] == "wandb"
     assert registered["lr_scheduler"]["default"] == "linear"
     assert registered["distill_weight"]["default"] == 0.0
+    assert registered["feature_distill_weight"]["default"] == 0.0
+    assert registered["feature_head_lr"]["default"] == 0.001
     assert registered["teacher_embeddings"]["default"] == "none"
 
 
@@ -842,12 +845,90 @@ def test_distillation_loss_ignores_masked_candidates():
     assert torch.allclose(loss(n, tn), loss(changed_n, changed_tn))
 
 
+def test_feature_distillation_loss_is_zero_when_projection_matches_teacher():
+    from leap_finetune.training.vlm_embedding import feature_distillation_loss
+
+    head = torch.nn.Linear(8, 16, bias=False)
+    student = _unit(6, 8, 0).view(2, 3, 8)
+    with torch.no_grad():
+        teacher = head(student)
+    assert feature_distillation_loss(student, teacher, head).abs().item() < 1e-6
+
+
+def test_feature_distillation_loss_trains_student_and_head():
+    from leap_finetune.training.vlm_embedding import feature_distillation_loss
+
+    head = torch.nn.Linear(8, 16, bias=False)
+    student = _unit(6, 8, 0).view(2, 3, 8).requires_grad_()
+    teacher = _unit(6, 16, 1).view(2, 3, 16)
+    loss = feature_distillation_loss(student, teacher, head)
+    loss.backward()
+    assert loss.item() > 0
+    assert student.grad is not None and student.grad.abs().sum() > 0
+    assert head.weight.grad is not None and head.weight.grad.abs().sum() > 0
+
+
+def _feature_trainer(teacher: np.ndarray, *, distill_weight: float = 0.0):
+    trainer = CachedLFMVLMEmbeddingTrainer.__new__(CachedLFMVLMEmbeddingTrainer)
+    trainer.embedding_temperature = 0.05
+    trainer.teacher_temperature = 0.05
+    trainer.teacher = teacher
+    trainer.distill_weight = distill_weight
+    trainer.feature_distill_weight = 0.5
+    trainer.args = SimpleNamespace(seed=7, device=torch.device("cpu"))
+    trainer.model = SimpleNamespace(
+        model=SimpleNamespace(
+            config=SimpleNamespace(text_config=SimpleNamespace(hidden_size=8))
+        )
+    )
+    trainer.feature_head = trainer._build_feature_head()
+    return trainer
+
+
+def test_feature_head_is_seeded_and_projects_to_teacher_width():
+    teacher = _unit(9, 16, 3).numpy()
+    first, second = _feature_trainer(teacher), _feature_trainer(teacher)
+    assert first.feature_head.weight.shape == (16, 8)
+    assert torch.equal(first.feature_head.weight, second.feature_head.weight)
+
+
+def test_objective_adds_weighted_feature_loss():
+    from leap_finetune.training.vlm_embedding import feature_distillation_loss
+
+    teacher = _unit(9, 16, 3).numpy()
+    trainer = _feature_trainer(teacher)
+    metadata = [
+        {
+            "positive_key": f"p{i}",
+            "negative_key": f"n{i}",
+            "teacher": {"query": 3 * i, "positive": 3 * i + 1, "negative": 3 * i + 2},
+        }
+        for i in range(3)
+    ]
+    rows = _unit(9, 8, 4).view(3, 3, 8)
+    loss = trainer._objective(rows, metadata)
+    contrastive = contrastive_embedding_loss(
+        rows[:, 0],
+        rows[:, 1],
+        rows[:, 2],
+        temperature=0.05,
+        candidate_mask=build_candidate_mask(metadata),
+    )
+    feature = feature_distillation_loss(
+        rows, torch.from_numpy(teacher).view(3, 3, 16), trainer.feature_head
+    )
+    assert torch.allclose(loss, contrastive + 0.5 * feature)
+    assert set(trainer._loss_metrics) == {"loss/contrastive", "loss/feature"}
+
+
 def test_dittopilot_exposes_distillation_controls():
     root = Path(__file__).parents[2]
     runner = (root / "dittopilot" / "run_vlm_embedding.sh").read_text()
 
     assert 'teacher_embeddings: "${TEACHER_EMBEDDINGS}"' in runner
     assert "distill_weight: ${DISTILL_WEIGHT}" in runner
+    assert "feature_distill_weight: ${FEATURE_DISTILL_WEIGHT}" in runner
+    assert "feature_head_lr: ${FEATURE_HEAD_LR}" in runner
     assert "teacher_temperature: ${TEACHER_TEMPERATURE}" in runner
 
 
