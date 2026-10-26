@@ -967,6 +967,9 @@ def vlm_embedding_run(
         text_attn_implementation=str(
             train_config.get("text_attn_implementation", "sdpa")
         ),
+        # Full fine-tuning keeps fp32 master weights under bf16 autocast;
+        # bf16 weights would round away most small AdamW updates.
+        dtype=torch.bfloat16 if peft_config or adapter_path else torch.float32,
     )
     processor_any = cast(Any, processor)
     processor_any.tokenizer.padding_side = "left"
@@ -1030,7 +1033,26 @@ def vlm_embedding_run(
             str(args.output_dir),
             train_config.get("leap_run_name_template"),
         )
+    elif is_rank_zero():
+        save_full_model(
+            trainable_model,
+            cast(ProcessorMixin, processor),
+            Path(str(args.output_dir)) / "final",
+        )
     finish_tracker(tracker)
+
+
+def save_full_model(
+    model: nn.Module, processor: ProcessorMixin, output_dir: Path
+) -> None:
+    """Save a fully fine-tuned model in bf16 with its processor."""
+
+    model = _unwrap_data_parallel(model)
+    model.to(torch.bfloat16)
+    cast(PreTrainedModel, model).save_pretrained(
+        str(output_dir), safe_serialization=True
+    )
+    processor.save_pretrained(str(output_dir))
 
 
 __all__ = [

@@ -941,3 +941,46 @@ def test_load_vlm_model_keeps_vision_on_sdpa(monkeypatch, text, expected):
     except Exception:
         pass
     assert seen["attn_implementation"] == expected
+
+
+def test_save_full_model_writes_bf16_weights_and_processor(tmp_path):
+    from transformers import PretrainedConfig, PreTrainedModel
+
+    from leap_finetune.training.vlm_embedding import save_full_model
+
+    class _Config(PretrainedConfig):
+        model_type = "toy-embedding"
+
+    class _Model(PreTrainedModel):
+        config_class = _Config
+
+        def __init__(self, config):
+            super().__init__(config)
+            self.linear = torch.nn.Linear(4, 4)
+
+    saved = []
+
+    class _Processor:
+        def save_pretrained(self, path):
+            saved.append(path)
+
+    from safetensors.torch import load_file
+
+    model = _Model(_Config()).float()
+    expected = model.linear.weight.detach().to(torch.bfloat16)
+    save_full_model(model, _Processor(), tmp_path / "final")
+    weights = load_file(str(tmp_path / "final" / "model.safetensors"))
+    assert (tmp_path / "final" / "config.json").exists()
+    assert saved == [str(tmp_path / "final")]
+    assert weights["linear.weight"].dtype == torch.bfloat16
+    assert torch.equal(weights["linear.weight"], expected)
+
+
+def test_dittopilot_exposes_full_fine_tuning():
+    root = Path(__file__).parents[2]
+    runner = (root / "dittopilot" / "run_vlm_embedding.sh").read_text()
+    registered = tomllib.loads((root / "dittopilot" / "training.toml").read_text())
+
+    assert "use_peft: ${USE_PEFT}" in runner
+    assert "*/final/config.json" in runner
+    assert registered["vlm_embedding"]["args"]["use_peft"]["default"] == "true"

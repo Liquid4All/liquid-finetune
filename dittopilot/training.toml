@@ -2,7 +2,7 @@
 description = "Native-dimension assistant-prefix contrastive adaptation for generative vision-language checkpoints."
 mode = "adapter"
 modality = "image"
-command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --micro-batch-size {{micro_batch_size}} --collate-workers {{collate_workers}} --collate-backend {{collate_backend}} --text-attn-implementation {{text_attn_implementation}} --cached-loss {{cached_loss}} --sort-rows {{sort_rows}} --retain-graphs {{retain_graphs}} --max-text-tokens {{max_text_tokens}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --gradient-checkpointing {{gradient_checkpointing}} --gradient-checkpointing-scope {{gradient_checkpointing_scope}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --min-image-tokens {{min_image_tokens}} --pooling {{pooling}} --lr-scheduler {{lr_scheduler}} --teacher-embeddings {{teacher_embeddings}} --distill-weight {{distill_weight}} --teacher-temperature {{teacher_temperature}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --tracker {{tracker}} --seed {{seed}}"
+command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --micro-batch-size {{micro_batch_size}} --collate-workers {{collate_workers}} --collate-backend {{collate_backend}} --use-peft {{use_peft}} --text-attn-implementation {{text_attn_implementation}} --cached-loss {{cached_loss}} --sort-rows {{sort_rows}} --retain-graphs {{retain_graphs}} --max-text-tokens {{max_text_tokens}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --gradient-checkpointing {{gradient_checkpointing}} --gradient-checkpointing-scope {{gradient_checkpointing_scope}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --min-image-tokens {{min_image_tokens}} --pooling {{pooling}} --lr-scheduler {{lr_scheduler}} --teacher-embeddings {{teacher_embeddings}} --distill-weight {{distill_weight}} --teacher-temperature {{teacher_temperature}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --tracker {{tracker}} --seed {{seed}}"
 gpus = 1
 cpus = 32
 nodes = 1
@@ -36,6 +36,11 @@ description = "Workers that load images and build micro-batches ahead of the acc
 type = "str"
 default = "sdpa"
 description = "Language-model attention: sdpa or flash_attention_2 (the SigLIP2 vision encoder always uses SDPA)."
+
+[vlm_embedding.args.use_peft]
+type = "str"
+default = "true"
+description = "true trains a LoRA adapter (merged at the end); false fine-tunes all parameters with fp32 master weights under bf16 autocast and saves the final model in bf16."
 
 [vlm_embedding.args.collate_backend]
 type = "str"

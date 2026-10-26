@@ -10,6 +10,7 @@ BATCH_SIZE="8192"
 MICRO_BATCH_SIZE="32"
 COLLATE_WORKERS="0"
 COLLATE_BACKEND="thread"
+USE_PEFT="true"
 TEXT_ATTN_IMPLEMENTATION="sdpa"
 CACHED_LOSS="true"
 SORT_ROWS="true"
@@ -46,6 +47,7 @@ while (($#)); do
     --micro-batch-size) MICRO_BATCH_SIZE="$2"; shift 2 ;;
     --collate-workers) COLLATE_WORKERS="$2"; shift 2 ;;
     --collate-backend) COLLATE_BACKEND="$2"; shift 2 ;;
+    --use-peft) USE_PEFT="$2"; shift 2 ;;
     --text-attn-implementation) TEXT_ATTN_IMPLEMENTATION="$2"; shift 2 ;;
     --cached-loss) CACHED_LOSS="$2"; shift 2 ;;
     --sort-rows) SORT_ROWS="$2"; shift 2 ;;
@@ -108,6 +110,10 @@ fi
 case "${COLLATE_BACKEND}" in
   thread|process) ;;
   *) echo "collate-backend must be thread or process" >&2; exit 2 ;;
+esac
+case "${USE_PEFT}" in
+  true|false) ;;
+  *) echo "use-peft must be true or false" >&2; exit 2 ;;
 esac
 case "${TEXT_ATTN_IMPLEMENTATION}" in
   sdpa|flash_attention_2) ;;
@@ -222,7 +228,7 @@ training_config:
   tracker: "${TRACKER}"
 peft_config:
   extends: "DEFAULT_VLM_LORA"
-  use_peft: true
+  use_peft: ${USE_PEFT}
   r: ${LORA_RANK}
   lora_alpha: ${LORA_ALPHA}
   lora_dropout: 0.0
@@ -254,7 +260,10 @@ if [[ "${DITTOPILOT_CLUSTER:-local}" == "amd" ]]; then
 fi
 OUTPUT_DIR="${STAGING_ROOT}" uv run "${UV_PROJECT_ARGS[@]}" leap-finetune "${CONFIG_PATH}"
 
-MERGED_DIR="$(find "${STAGING_ROOT}" -type f -name config.json -printf '%h\n' | while read -r candidate; do
+# Full fine-tuning saves final/; intermediate checkpoint-N dirs also carry
+# config.json, so never fall back to sorting them.
+MERGED_DIR="$(find "${STAGING_ROOT}" -type f -path '*/final/config.json' -printf '%h\n' | head -1)"
+[[ "${USE_PEFT}" == "false" ]] || MERGED_DIR="$(find "${STAGING_ROOT}" -type f -name config.json -printf '%h\n' | while read -r candidate; do
   if compgen -G "${candidate}/*.safetensors" >/dev/null; then
     printf '%s\n' "${candidate}"
   fi

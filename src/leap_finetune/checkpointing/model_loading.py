@@ -303,6 +303,7 @@ def load_vlm_model(
     max_image_tokens: int | None = None,
     do_image_splitting: bool = True,
     text_attn_implementation: str = "sdpa",
+    dtype: torch.dtype = torch.bfloat16,
 ) -> tuple[AutoModelForImageTextToText, AutoProcessor]:
     """Load a VLM model from the Hugging Face Hub or from a local path.
 
@@ -329,7 +330,7 @@ def load_vlm_model(
     )
     model = AutoModelForImageTextToText.from_pretrained(
         model_id,
-        dtype=torch.bfloat16,
+        dtype=dtype,
         trust_remote_code=True,
         attn_implementation=attn_implementation,
     )
