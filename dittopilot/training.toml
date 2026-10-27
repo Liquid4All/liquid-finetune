@@ -2,7 +2,7 @@
 description = "Native-dimension assistant-prefix contrastive adaptation for generative vision-language checkpoints."
 mode = "adapter"
 modality = "image"
-command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --micro-batch-size {{micro_batch_size}} --collate-workers {{collate_workers}} --collate-backend {{collate_backend}} --use-peft {{use_peft}} --text-attn-implementation {{text_attn_implementation}} --cached-loss {{cached_loss}} --sort-rows {{sort_rows}} --retain-graphs {{retain_graphs}} --max-text-tokens {{max_text_tokens}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --gradient-checkpointing {{gradient_checkpointing}} --gradient-checkpointing-scope {{gradient_checkpointing_scope}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --min-image-tokens {{min_image_tokens}} --pooling {{pooling}} --lr-scheduler {{lr_scheduler}} --teacher-embeddings {{teacher_embeddings}} --distill-weight {{distill_weight}} --feature-distill-weight {{feature_distill_weight}} --feature-head-lr {{feature_head_lr}} --teacher-temperature {{teacher_temperature}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --tracker {{tracker}} --seed {{seed}}"
+command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --micro-batch-size {{micro_batch_size}} --collate-workers {{collate_workers}} --collate-backend {{collate_backend}} --use-peft {{use_peft}} --text-attn-implementation {{text_attn_implementation}} --cached-loss {{cached_loss}} --sort-rows {{sort_rows}} --retain-graphs {{retain_graphs}} --max-text-tokens {{max_text_tokens}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --gradient-checkpointing {{gradient_checkpointing}} --gradient-checkpointing-scope {{gradient_checkpointing_scope}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --min-image-tokens {{min_image_tokens}} --pooling {{pooling}} --lr-scheduler {{lr_scheduler}} --teacher-embeddings {{teacher_embeddings}} --distill-weight {{distill_weight}} --feature-distill-weight {{feature_distill_weight}} --feature-head-lr {{feature_head_lr}} --teacher-temperature {{teacher_temperature}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --tracker {{tracker}} --seed {{seed}} --resume-from {{resume_from}}"
 gpus = 1
 cpus = 32
 nodes = 1
@@ -171,3 +171,8 @@ description = "Experiment tracker; supported values are wandb and none."
 type = "int"
 default = 20261019
 description = "Pinned trainer and dataloader seed."
+
+[vlm_embedding.args.resume_from]
+type = "str"
+default = "auto"
+description = "auto resumes a requeued job from its own latest checkpoint; a checkpoint directory resumes that run; none always starts fresh."

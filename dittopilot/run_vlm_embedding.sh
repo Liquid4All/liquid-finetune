@@ -37,6 +37,7 @@ WEIGHT_DECAY="0.01"
 SAVE_STEPS="10"
 TRACKER="wandb"
 SEED="20261019"
+RESUME_FROM="auto"
 
 while (($#)); do
   case "$1" in
@@ -76,6 +77,7 @@ while (($#)); do
     --save-steps) SAVE_STEPS="$2"; shift 2 ;;
     --tracker) TRACKER="$2"; shift 2 ;;
     --seed) SEED="$2"; shift 2 ;;
+    --resume-from) RESUME_FROM="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -172,10 +174,31 @@ fi
 
 STAGING_ROOT="${OUTPUT}.staging"
 CONFIG_PATH="${TMPDIR:-/tmp}/vlm-embedding-${SLURM_JOB_ID:-local}.yaml"
-if [[ -e "${STAGING_ROOT}" ]]; then
-  echo "Refusing to overwrite staging path: ${STAGING_ROOT}" >&2
-  exit 2
-fi
+# auto: a requeued job finds its own staging root and resumes from the newest
+# `latest` checkpoint in it. A path resumes that checkpoint; the trainer then
+# writes into the checkpoint's run directory. none: always start fresh.
+RUN_ROOT="${STAGING_ROOT}"
+RESUME_LINE=""
+case "${RESUME_FROM}" in
+  none)
+    if [[ -e "${STAGING_ROOT}" ]]; then
+      echo "Refusing to overwrite staging path: ${STAGING_ROOT}" >&2
+      exit 2
+    fi ;;
+  auto)
+    if [[ -e "${STAGING_ROOT}" ]]; then
+      echo "Resuming from the latest checkpoint under ${STAGING_ROOT}"
+      RESUME_LINE='  resume_from_checkpoint: "latest"'
+    fi ;;
+  *)
+    if [[ ! -f "${RESUME_FROM}/trainer_state.json" ]]; then
+      echo "resume-from is not a Trainer checkpoint: ${RESUME_FROM}" >&2
+      exit 2
+    fi
+    RESUME_FROM="$(realpath "${RESUME_FROM}")"
+    RUN_ROOT="$(dirname "${RESUME_FROM}")"
+    RESUME_LINE="  resume_from_checkpoint: \"${RESUME_FROM}\"" ;;
+esac
 mkdir -p "${STAGING_ROOT}"
 
 cat >"${CONFIG_PATH}" <<EOF
@@ -232,6 +255,7 @@ training_config:
   dataloader_prefetch_factor: 4
   leap_run_name_template: "vlm-embedding-lora_a"
   tracker: "${TRACKER}"
+${RESUME_LINE}
 peft_config:
   extends: "DEFAULT_VLM_LORA"
   use_peft: ${USE_PEFT}
@@ -268,8 +292,8 @@ OUTPUT_DIR="${STAGING_ROOT}" uv run "${UV_PROJECT_ARGS[@]}" leap-finetune "${CON
 
 # Full fine-tuning saves final/; intermediate checkpoint-N dirs also carry
 # config.json, so never fall back to sorting them.
-MERGED_DIR="$(find "${STAGING_ROOT}" -type f -path '*/final/config.json' -printf '%h\n' | head -1)"
-[[ "${USE_PEFT}" == "false" ]] || MERGED_DIR="$(find "${STAGING_ROOT}" -type f -name config.json -printf '%h\n' | while read -r candidate; do
+MERGED_DIR="$(find "${RUN_ROOT}" -type f -path '*/final/config.json' -printf '%h\n' | head -1)"
+[[ "${USE_PEFT}" == "false" ]] || MERGED_DIR="$(find "${RUN_ROOT}" -type f -name config.json -printf '%h\n' | while read -r candidate; do
   if compgen -G "${candidate}/*.safetensors" >/dev/null; then
     printf '%s\n' "${candidate}"
   fi
