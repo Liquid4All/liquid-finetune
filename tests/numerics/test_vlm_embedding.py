@@ -929,6 +929,9 @@ def test_dittopilot_exposes_distillation_controls():
     assert "distill_weight: ${DISTILL_WEIGHT}" in runner
     assert "feature_distill_weight: ${FEATURE_DISTILL_WEIGHT}" in runner
     assert "feature_head_lr: ${FEATURE_HEAD_LR}" in runner
+    assert 'feature_projection: "${FEATURE_PROJECTION}"' in runner
+    assert "same_tower_negatives: ${SAME_TOWER_NEGATIVES}" in runner
+    assert "spread_out_weight: ${SPREAD_OUT_WEIGHT}" in runner
     assert "teacher_temperature: ${TEACHER_TEMPERATURE}" in runner
 
 
@@ -1095,3 +1098,101 @@ def test_encode_autocasts_only_fp32_backbones(dtype, autocast):
 
     assert seen["autocast"] is autocast
     assert seen["dtype"] == torch.bfloat16
+
+
+def test_same_tower_negatives_extend_the_denominator():
+    query, positive, negative = _unit(4, 8, 11), _unit(4, 8, 12), _unit(4, 8, 13)
+    plain = contrastive_embedding_loss(query, positive, negative, temperature=0.1)
+    tower = contrastive_embedding_loss(
+        query, positive, negative, temperature=0.1, same_tower=True
+    )
+    off = ~torch.eye(4, dtype=torch.bool)
+    expected = []
+    for i in range(4):
+        row = torch.cat(
+            (
+                query[i] @ torch.cat((positive, negative)).T,
+                (query[i] @ query.T)[off[i]],
+                (positive[i] @ positive.T)[off[i]],
+            )
+        )
+        expected.append(-torch.log_softmax(row / 0.1, dim=0)[i])
+    assert torch.allclose(tower, torch.stack(expected).mean(), atol=1e-6)
+    assert tower > plain
+
+
+def test_same_tower_negatives_respect_the_candidate_mask():
+    # Both rows share a positive, so the mask removes every same-tower pair.
+    metadata = [
+        {"positive_key": "shared", "negative_key": "n0"},
+        {"positive_key": "shared", "negative_key": "n1"},
+    ]
+    mask = build_candidate_mask(metadata)
+    query, positive, negative = _unit(2, 8, 21), _unit(2, 8, 22), _unit(2, 8, 23)
+    plain = contrastive_embedding_loss(
+        query, positive, negative, temperature=0.1, candidate_mask=mask
+    )
+    tower = contrastive_embedding_loss(
+        query, positive, negative, temperature=0.1, candidate_mask=mask, same_tower=True
+    )
+    assert torch.allclose(tower, plain, atol=1e-6)
+
+
+def test_spread_out_loss_is_zero_for_orthogonal_and_two_for_identical_rows():
+    from leap_finetune.training.vlm_embedding import spread_out_loss
+
+    eye = torch.eye(4)
+    assert spread_out_loss(eye, eye).item() == 0
+    same = _unit(1, 8, 5).expand(4, 8)
+    assert torch.allclose(spread_out_loss(same, same), torch.tensor(2.0))
+
+
+def test_truncated_embedding_loss_matches_leading_teacher_dimensions():
+    from leap_finetune.training.vlm_embedding import truncated_embedding_loss
+
+    teacher = _unit(6, 16, 31).view(2, 3, 16)
+    student = torch.nn.functional.normalize(teacher[..., :8], dim=-1)
+    assert truncated_embedding_loss(student, teacher).abs().item() < 1e-6
+    assert truncated_embedding_loss(_unit(6, 8, 32).view(2, 3, 8), teacher) > 0
+    with pytest.raises(ValueError):
+        truncated_embedding_loss(_unit(6, 32, 33).view(2, 3, 32), teacher)
+
+
+def test_objective_with_truncated_features_same_tower_and_spread():
+    from leap_finetune.training.vlm_embedding import (
+        spread_out_loss,
+        truncated_embedding_loss,
+    )
+
+    teacher = _unit(9, 16, 3).numpy()
+    trainer = _feature_trainer(teacher)
+    trainer.feature_head = None
+    trainer.feature_projection = "truncate"
+    trainer.same_tower_negatives = True
+    trainer.spread_out_weight = 0.25
+    metadata = [
+        {
+            "positive_key": f"p{i}",
+            "negative_key": f"n{i}",
+            "teacher": {"query": 3 * i, "positive": 3 * i + 1, "negative": 3 * i + 2},
+        }
+        for i in range(3)
+    ]
+    rows = _unit(9, 8, 4).view(3, 3, 8)
+    loss = trainer._objective(rows, metadata)
+    contrastive = contrastive_embedding_loss(
+        rows[:, 0],
+        rows[:, 1],
+        rows[:, 2],
+        temperature=0.05,
+        candidate_mask=build_candidate_mask(metadata),
+        same_tower=True,
+    )
+    spread = spread_out_loss(rows[:, 0], rows[:, 1])
+    feature = truncated_embedding_loss(rows, torch.from_numpy(teacher).view(3, 3, 16))
+    assert torch.allclose(loss, contrastive + 0.25 * spread + 0.5 * feature)
+    assert set(trainer._loss_metrics) == {
+        "loss/contrastive",
+        "loss/spread",
+        "loss/feature",
+    }

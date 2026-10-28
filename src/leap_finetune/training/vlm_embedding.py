@@ -68,6 +68,9 @@ _RUNTIME_KEYS = {
     "distill_weight",
     "feature_distill_weight",
     "feature_head_lr",
+    "feature_projection",
+    "same_tower_negatives",
+    "spread_out_weight",
     "teacher_temperature",
     "text_attn_implementation",
 }
@@ -143,8 +146,14 @@ def contrastive_embedding_loss(
     *,
     temperature: float,
     candidate_mask: torch.Tensor | None = None,
+    same_tower: bool = False,
 ) -> torch.Tensor:
-    """Query-to-document InfoNCE over positives and explicit hard negatives."""
+    """Query-to-document InfoNCE over positives and explicit hard negatives.
+
+    ``same_tower`` adds query-query and positive-positive similarities to each
+    row's denominator (SamToNe), restricted to the in-batch positives the
+    candidate mask allows and excluding the row itself.
+    """
 
     if temperature <= 0:
         raise ValueError("temperature must be positive")
@@ -166,7 +175,35 @@ def contrastive_embedding_loss(
             raise ValueError("candidate mask must retain every paired positive")
         logits = logits.masked_fill(~candidate_mask, torch.finfo(logits.dtype).min)
     labels = torch.arange(query.shape[0], device=query.device)
+    if same_tower:
+        size = query.shape[0]
+        keep = ~torch.eye(size, dtype=torch.bool, device=logits.device)
+        if candidate_mask is not None:
+            keep &= candidate_mask[:, :size]
+        fill = torch.finfo(logits.dtype).min
+        logits = torch.cat(
+            (
+                logits,
+                (query @ query.transpose(0, 1)).masked_fill(~keep, fill),
+                (positive @ positive.transpose(0, 1)).masked_fill(~keep, fill),
+            ),
+            dim=1,
+        )
     return F.cross_entropy(logits / temperature, labels)
+
+
+def spread_out_loss(query: torch.Tensor, positive: torch.Tensor) -> torch.Tensor:
+    """Second-moment global orthogonal regularizer over distinct in-batch pairs."""
+
+    def second_moment(rows: torch.Tensor) -> torch.Tensor:
+        size = rows.shape[0]
+        if size < 2:
+            return rows.new_zeros(())
+        similarity = rows.float() @ rows.float().transpose(0, 1)
+        off_diagonal = ~torch.eye(size, dtype=torch.bool, device=rows.device)
+        return similarity[off_diagonal].pow(2).mean()
+
+    return second_moment(query) + second_moment(positive)
 
 
 def _masked_logits(
@@ -227,6 +264,18 @@ def feature_distillation_loss(
 
     projected = head(student.float())
     return (1 - F.cosine_similarity(projected, teacher.to(projected), dim=-1)).mean()
+
+
+def truncated_embedding_loss(
+    student: torch.Tensor, teacher: torch.Tensor
+) -> torch.Tensor:
+    """Mean cosine distance to the teacher's leading (Matryoshka) dimensions."""
+
+    width = student.shape[-1]
+    if teacher.shape[-1] < width:
+        raise ValueError("teacher embeddings are narrower than the student")
+    target = F.normalize(teacher[..., :width].to(student.device).float(), dim=-1)
+    return (1 - F.cosine_similarity(student.float(), target, dim=-1)).mean()
 
 
 def _is_distributed() -> bool:
@@ -480,6 +529,9 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
     distill_weight: float = 0.0
     feature_distill_weight: float = 0.0
     feature_head: nn.Linear | None = None
+    feature_projection: str = "learned"
+    same_tower_negatives: bool = False
+    spread_out_weight: float = 0.0
     teacher_temperature: float = 0.02
     _loss_metrics: dict[str, float] = {}
     _profiler: StepProfiler | None = None
@@ -500,13 +552,18 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         distill_weight: float = 0.0,
         feature_distill_weight: float = 0.0,
         feature_head_lr: float = 1e-3,
+        feature_projection: str = "learned",
+        same_tower_negatives: bool = False,
+        spread_out_weight: float = 0.0,
         teacher_temperature: float = 0.02,
         **kwargs: Any,
     ) -> None:
         if micro_batch_size <= 0:
             raise ValueError("micro_batch_size must be positive")
-        if distill_weight < 0 or feature_distill_weight < 0:
-            raise ValueError("distillation weights must be non-negative")
+        if distill_weight < 0 or feature_distill_weight < 0 or spread_out_weight < 0:
+            raise ValueError("loss weights must be non-negative")
+        if feature_projection not in ("learned", "truncate"):
+            raise ValueError("feature_projection must be learned or truncate")
         distilling = distill_weight > 0 or feature_distill_weight > 0
         if distilling and not teacher_embeddings:
             raise ValueError("distillation requires teacher_embeddings")
@@ -519,9 +576,14 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         self.distill_weight = distill_weight
         self.feature_distill_weight = feature_distill_weight
         self.feature_head_lr = feature_head_lr
+        self.feature_projection = feature_projection
         self.feature_head = (
-            self._build_feature_head() if feature_distill_weight > 0 else None
+            self._build_feature_head()
+            if feature_distill_weight > 0 and feature_projection == "learned"
+            else None
         )
+        self.same_tower_negatives = same_tower_negatives
+        self.spread_out_weight = spread_out_weight
         self.teacher_temperature = teacher_temperature
         self._loss_metrics: dict[str, float] = {}
         self.micro_batch_size = micro_batch_size
@@ -670,7 +732,7 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
     def _objective(
         self, rows: torch.Tensor, metadata: list[dict[str, Any]]
     ) -> torch.Tensor:
-        """InfoNCE over the global batch, plus weighted teacher KL when configured."""
+        """InfoNCE over the global batch plus the configured regularizer and teacher terms."""
 
         mask = build_candidate_mask(metadata)
         contrastive = contrastive_embedding_loss(
@@ -679,13 +741,17 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             rows[:, 2],
             temperature=self.embedding_temperature,
             candidate_mask=mask,
+            same_tower=self.same_tower_negatives,
         )
-        if self.teacher is None:
-            self._loss_metrics = {}
-            return contrastive
-        teacher = self._teacher_rows(metadata, rows.device)
         loss = contrastive
         self._loss_metrics = {"loss/contrastive": float(contrastive.detach())}
+        if self.spread_out_weight > 0:
+            spread = spread_out_loss(rows[:, 0], rows[:, 1])
+            self._loss_metrics["loss/spread"] = float(spread.detach())
+            loss = loss + self.spread_out_weight * spread
+        if self.teacher is None:
+            return loss
+        teacher = self._teacher_rows(metadata, rows.device)
         if self.distill_weight > 0:
             distill = distillation_loss(
                 rows[:, 0],
@@ -700,8 +766,12 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             )
             self._loss_metrics["loss/distill"] = float(distill.detach())
             loss = loss + self.distill_weight * distill
-        if self.feature_head is not None:
-            feature = feature_distillation_loss(rows, teacher, self.feature_head)
+        if self.feature_distill_weight > 0:
+            feature = (
+                feature_distillation_loss(rows, teacher, self.feature_head)
+                if self.feature_head is not None
+                else truncated_embedding_loss(rows, teacher)
+            )
             self._loss_metrics["loss/feature"] = float(feature.detach())
             loss = loss + self.feature_distill_weight * feature
         return loss
@@ -1080,6 +1150,9 @@ def vlm_embedding_run(
                 train_config.get("feature_distill_weight", 0.0)
             ),
             feature_head_lr=float(train_config.get("feature_head_lr", 1e-3)),
+            feature_projection=str(train_config.get("feature_projection", "learned")),
+            same_tower_negatives=bool(train_config.get("same_tower_negatives", False)),
+            spread_out_weight=float(train_config.get("spread_out_weight", 0.0)),
             teacher_temperature=float(train_config.get("teacher_temperature", 0.02)),
         )
     else:
@@ -1088,6 +1161,10 @@ def vlm_embedding_run(
             or float(train_config.get("feature_distill_weight", 0.0)) > 0
         ):
             raise ValueError("distillation requires cached_loss")
+        if train_config.get("same_tower_negatives") or float(
+            train_config.get("spread_out_weight", 0.0)
+        ):
+            raise ValueError("same-tower negatives and spread-out require cached_loss")
         trainer_kwargs["data_collator"] = create_vlm_embedding_collate_fn(
             processor, max_text_tokens
         )

@@ -29,6 +29,9 @@ TEACHER_EMBEDDINGS=""
 DISTILL_WEIGHT="0"
 FEATURE_DISTILL_WEIGHT="0"
 FEATURE_HEAD_LR="1e-3"
+FEATURE_PROJECTION="learned"
+SAME_TOWER_NEGATIVES="false"
+SPREAD_OUT_WEIGHT="0"
 TEACHER_TEMPERATURE="0.02"
 LORA_RANK="64"
 LORA_ALPHA="64"
@@ -69,6 +72,9 @@ while (($#)); do
     --distill-weight) DISTILL_WEIGHT="$2"; shift 2 ;;
     --feature-distill-weight) FEATURE_DISTILL_WEIGHT="$2"; shift 2 ;;
     --feature-head-lr) FEATURE_HEAD_LR="$2"; shift 2 ;;
+    --feature-projection) FEATURE_PROJECTION="$2"; shift 2 ;;
+    --same-tower-negatives) SAME_TOWER_NEGATIVES="$2"; shift 2 ;;
+    --spread-out-weight) SPREAD_OUT_WEIGHT="$2"; shift 2 ;;
     --teacher-temperature) TEACHER_TEMPERATURE="$2"; shift 2 ;;
     --lora-rank) LORA_RANK="$2"; shift 2 ;;
     --lora-alpha) LORA_ALPHA="$2"; shift 2 ;;
@@ -132,6 +138,14 @@ esac
 case "${SORT_ROWS}" in
   true|false) ;;
   *) echo "sort-rows must be true or false" >&2; exit 2 ;;
+esac
+case "${FEATURE_PROJECTION}" in
+  learned|truncate) ;;
+  *) echo "feature-projection must be learned or truncate" >&2; exit 2 ;;
+esac
+case "${SAME_TOWER_NEGATIVES}" in
+  true|false) ;;
+  *) echo "same-tower-negatives must be true or false" >&2; exit 2 ;;
 esac
 case "${RETAIN_GRAPHS}" in
   true|false) ;;
@@ -240,6 +254,9 @@ training_config:
   distill_weight: ${DISTILL_WEIGHT}
   feature_distill_weight: ${FEATURE_DISTILL_WEIGHT}
   feature_head_lr: ${FEATURE_HEAD_LR}
+  feature_projection: "${FEATURE_PROJECTION}"
+  same_tower_negatives: ${SAME_TOWER_NEGATIVES}
+  spread_out_weight: ${SPREAD_OUT_WEIGHT}
   teacher_temperature: ${TEACHER_TEMPERATURE}
   max_image_tokens: ${MAX_IMAGE_TOKENS}
   min_image_tokens: ${MIN_IMAGE_TOKENS}

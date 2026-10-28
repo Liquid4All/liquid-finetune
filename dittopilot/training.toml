@@ -2,7 +2,7 @@
 description = "Native-dimension assistant-prefix contrastive adaptation for generative vision-language checkpoints."
 mode = "adapter"
 modality = "image"
-command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --micro-batch-size {{micro_batch_size}} --collate-workers {{collate_workers}} --collate-backend {{collate_backend}} --use-peft {{use_peft}} --text-attn-implementation {{text_attn_implementation}} --cached-loss {{cached_loss}} --sort-rows {{sort_rows}} --retain-graphs {{retain_graphs}} --max-text-tokens {{max_text_tokens}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --gradient-checkpointing {{gradient_checkpointing}} --gradient-checkpointing-scope {{gradient_checkpointing_scope}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --min-image-tokens {{min_image_tokens}} --pooling {{pooling}} --lr-scheduler {{lr_scheduler}} --teacher-embeddings {{teacher_embeddings}} --distill-weight {{distill_weight}} --feature-distill-weight {{feature_distill_weight}} --feature-head-lr {{feature_head_lr}} --teacher-temperature {{teacher_temperature}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --tracker {{tracker}} --seed {{seed}} --resume-from {{resume_from}}"
+command = "bash dittopilot/run_vlm_embedding.sh --checkpoint {{checkpoint_path}} --dataset {{dataset_path}} --output {{output_checkpoint_path}} --run-name {{run_name}} --learning-rate {{learning_rate}} --batch-size {{batch_size}} --micro-batch-size {{micro_batch_size}} --collate-workers {{collate_workers}} --collate-backend {{collate_backend}} --use-peft {{use_peft}} --text-attn-implementation {{text_attn_implementation}} --cached-loss {{cached_loss}} --sort-rows {{sort_rows}} --retain-graphs {{retain_graphs}} --max-text-tokens {{max_text_tokens}} --gradient-accumulation-steps {{gradient_accumulation_steps}} --gradient-checkpointing {{gradient_checkpointing}} --gradient-checkpointing-scope {{gradient_checkpointing_scope}} --max-steps {{max_steps}} --temperature {{temperature}} --max-image-tokens {{max_image_tokens}} --min-image-tokens {{min_image_tokens}} --pooling {{pooling}} --lr-scheduler {{lr_scheduler}} --teacher-embeddings {{teacher_embeddings}} --distill-weight {{distill_weight}} --feature-distill-weight {{feature_distill_weight}} --feature-head-lr {{feature_head_lr}} --feature-projection {{feature_projection}} --same-tower-negatives {{same_tower_negatives}} --spread-out-weight {{spread_out_weight}} --teacher-temperature {{teacher_temperature}} --lora-rank {{lora_rank}} --lora-alpha {{lora_alpha}} --warmup-ratio {{warmup_ratio}} --weight-decay {{weight_decay}} --save-steps {{save_steps}} --tracker {{tracker}} --seed {{seed}} --resume-from {{resume_from}}"
 gpus = 1
 cpus = 32
 nodes = 1
@@ -81,6 +81,21 @@ description = "Weight of the mean cosine distance between a learned student->tea
 type = "float"
 default = 0.001
 description = "Learning rate of the training-only feature-distillation projection (no weight decay)."
+
+[vlm_embedding.args.feature_projection]
+type = "str"
+default = "learned"
+description = "Feature distillation target: learned projects the student to the teacher width; truncate matches the teacher's leading (Matryoshka) dimensions with no head."
+
+[vlm_embedding.args.same_tower_negatives]
+type = "str"
+default = "false"
+description = "Add query-query and positive-positive similarities to the InfoNCE denominator (same-tower negatives). true or false."
+
+[vlm_embedding.args.spread_out_weight]
+type = "float"
+default = 0.0
+description = "Weight of the second-moment spread-out regularizer over in-batch query and positive pairs."
 
 [vlm_embedding.args.teacher_temperature]
 type = "float"
