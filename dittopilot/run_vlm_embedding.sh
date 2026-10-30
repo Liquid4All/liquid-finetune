@@ -32,6 +32,9 @@ FEATURE_HEAD_LR="1e-3"
 FEATURE_PROJECTION="learned"
 SAME_TOWER_NEGATIVES="false"
 SPREAD_OUT_WEIGHT="0"
+FALSE_NEGATIVE_MARGIN="none"
+SAME_SOURCE_BATCH_SIZE="0"
+SAME_SOURCE_FIELD="task_name"
 TEACHER_TEMPERATURE="0.02"
 LORA_RANK="64"
 LORA_ALPHA="64"
@@ -75,6 +78,9 @@ while (($#)); do
     --feature-projection) FEATURE_PROJECTION="$2"; shift 2 ;;
     --same-tower-negatives) SAME_TOWER_NEGATIVES="$2"; shift 2 ;;
     --spread-out-weight) SPREAD_OUT_WEIGHT="$2"; shift 2 ;;
+    --false-negative-margin) FALSE_NEGATIVE_MARGIN="$2"; shift 2 ;;
+    --same-source-batch-size) SAME_SOURCE_BATCH_SIZE="$2"; shift 2 ;;
+    --same-source-field) SAME_SOURCE_FIELD="$2"; shift 2 ;;
     --teacher-temperature) TEACHER_TEMPERATURE="$2"; shift 2 ;;
     --lora-rank) LORA_RANK="$2"; shift 2 ;;
     --lora-alpha) LORA_ALPHA="$2"; shift 2 ;;
@@ -257,6 +263,9 @@ training_config:
   feature_projection: "${FEATURE_PROJECTION}"
   same_tower_negatives: ${SAME_TOWER_NEGATIVES}
   spread_out_weight: ${SPREAD_OUT_WEIGHT}
+  false_negative_margin: "${FALSE_NEGATIVE_MARGIN}"
+  same_source_batch_size: ${SAME_SOURCE_BATCH_SIZE}
+  same_source_field: "${SAME_SOURCE_FIELD}"
   teacher_temperature: ${TEACHER_TEMPERATURE}
   max_image_tokens: ${MAX_IMAGE_TOKENS}
   min_image_tokens: ${MIN_IMAGE_TOKENS}

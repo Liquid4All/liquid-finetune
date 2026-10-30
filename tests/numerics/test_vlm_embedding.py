@@ -1196,3 +1196,95 @@ def test_objective_with_truncated_features_same_tower_and_spread():
         "loss/spread",
         "loss/feature",
     }
+
+
+def test_teacher_false_negative_mask_drops_candidates_above_positive_plus_margin():
+    from leap_finetune.training.vlm_embedding import teacher_false_negative_mask
+
+    query = torch.eye(3)
+    positive = torch.tensor([[0.6, 0.8, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    negative = torch.tensor([[1.0, 0.0, 0.0], [0.0, 0.8, 0.6], [0.0, 0.6, 0.8]])
+    keep = teacher_false_negative_mask(query, positive, negative, 0.1)
+    # Row 0: s(pos)=0.6, so its own negative (1.0 > 0.7) is dropped.
+    assert keep[0].tolist() == [True, True, True, False, True, True]
+    # Rows 1-2: s(pos)=1.0, nothing exceeds 1.1.
+    assert keep[1:].all()
+    # The paired positive is kept even when the teacher scores it lowest.
+    low = teacher_false_negative_mask(query, -positive, negative, 0.0)
+    assert low.diagonal().all()
+    assert not low[0, 3]
+
+
+def test_objective_applies_false_negative_mask_and_reports_fraction():
+    teacher = np.zeros((6, 4), dtype=np.float32)
+    teacher[[0, 1, 3, 4]] = [1, 0, 0, 0]
+    teacher[2] = [0, 1, 0, 0]
+    teacher[5] = [0, 0, 1, 0]
+    trainer = _feature_trainer(teacher)
+    trainer.feature_distill_weight = 0.0
+    trainer.feature_head = None
+    trainer.false_negative_margin = 0.1
+    metadata = [
+        {
+            "positive_key": f"p{i}",
+            "negative_key": f"n{i}",
+            "teacher": {"query": 3 * i, "positive": 3 * i + 1, "negative": 3 * i + 2},
+        }
+        for i in range(2)
+    ]
+    rows = _unit(6, 8, 5).view(2, 3, 8)
+    loss = trainer._objective(rows, metadata)
+    mask = build_candidate_mask(metadata)
+    # Every query and positive is the same teacher vector, so s(pos)=1 and no
+    # candidate exceeds 1.1: nothing is masked.
+    expected = contrastive_embedding_loss(
+        rows[:, 0], rows[:, 1], rows[:, 2], temperature=0.05, candidate_mask=mask
+    )
+    assert torch.allclose(loss, expected)
+    assert trainer._loss_metrics["mask/false_negative_fraction"] == 0.0
+    trainer.false_negative_margin = -0.5
+    trainer._objective(rows, metadata)
+    # Allowed off-diagonal candidates per row: other positive + 2 negatives = 3;
+    # with margin -0.5 the threshold is 0.5, so only the other row's positive (1.0) is dropped.
+    assert trainer._loss_metrics["mask/false_negative_fraction"] == pytest.approx(2 / 6)
+
+
+def test_same_source_sampler_builds_single_source_slots_with_the_epoch_mixture():
+    from collections import Counter
+
+    from leap_finetune.data_loading.same_source_batching import (
+        MIXED,
+        SameSourceBatchSampler,
+        slot_schedule,
+    )
+
+    sources = ["a"] * 40 + ["b"] * 20 + ["c"] * 5 + ["d"] * 3
+    sampler = SameSourceBatchSampler(
+        sources, per_device_batch_size=8, slot_rows=4, world_size=1, rank=0, seed=3
+    )
+    # a: 10 full slots, b: 5, c: 1 (+1 left over), d: 0 (+3); 4 leftovers fill 1 mixed slot.
+    assert Counter(slot_schedule(Counter(sources), 4, 1, 3)) == Counter(
+        {"a": 10, "b": 5, "c": 1, MIXED: 1}
+    )
+    batches = list(sampler)
+    # 17 slots trimmed to whole 2-slot steps.
+    assert len(batches) == len(sampler) == 8
+    for batch in batches:
+        assert len(batch) == 8
+        for start in (0, 4):
+            slot = {sources[i] for i in batch[start : start + 4]}
+            assert len(slot) == 1 or slot <= {"c", "d"}
+    second = list(sampler)
+    assert second != batches
+
+
+def test_same_source_sampler_schedules_agree_across_ranks():
+    from collections import Counter
+
+    from leap_finetune.data_loading.same_source_batching import slot_schedule
+
+    counts = Counter({"x": 1000, "y": 300, "z": 70})
+    assert slot_schedule(counts, 64, 8, 11) == slot_schedule(
+        Counter(dict(counts)), 64, 8, 11
+    )
+    assert slot_schedule(counts, 64, 8, 11) != slot_schedule(counts, 64, 8, 12)

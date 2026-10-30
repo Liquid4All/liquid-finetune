@@ -17,10 +17,12 @@ import torch.nn.functional as F
 from torch import nn
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 from torch.profiler import ProfilerActivity, profile, record_function
+from torch.utils.data import DataLoader
 from transformers import PreTrainedModel, ProcessorMixin, Trainer, TrainingArguments
 
 from leap_finetune.checkpointing.callback import LeapCheckpointCallback
 from leap_finetune.checkpointing.model_loading import load_vlm_model
+from leap_finetune.data_loading.same_source_batching import SameSourceBatchSampler
 from leap_finetune.data_loading.vlm_embedding import (
     OrderedChunkCollator,
     build_candidate_mask,
@@ -73,6 +75,9 @@ _RUNTIME_KEYS = {
     "spread_out_weight",
     "teacher_temperature",
     "text_attn_implementation",
+    "false_negative_margin",
+    "same_source_batch_size",
+    "same_source_field",
 }
 
 _EMBEDDING_ROLES = ("query", "positive", "negative")
@@ -204,6 +209,27 @@ def spread_out_loss(query: torch.Tensor, positive: torch.Tensor) -> torch.Tensor
         return similarity[off_diagonal].pow(2).mean()
 
     return second_moment(query) + second_moment(positive)
+
+
+def teacher_false_negative_mask(
+    teacher_query: torch.Tensor,
+    teacher_positive: torch.Tensor,
+    teacher_negative: torch.Tensor,
+    margin: float,
+) -> torch.Tensor:
+    """Keep candidates the teacher scores at most ``margin`` above the row's own positive.
+
+    Candidates scoring higher are likely unlabeled positives (Qwen3-VL-Embedding's
+    in-batch false-negative rule, with offline teacher scores); the paired
+    positive is always kept.
+    """
+
+    scores = teacher_query @ torch.cat((teacher_positive, teacher_negative), dim=0).T
+    threshold = (teacher_query * teacher_positive).sum(dim=-1, keepdim=True) + margin
+    keep = scores <= threshold
+    rows = torch.arange(teacher_query.shape[0], device=keep.device)
+    keep[rows, rows] = True
+    return keep
 
 
 def _masked_logits(
@@ -533,6 +559,9 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
     same_tower_negatives: bool = False
     spread_out_weight: float = 0.0
     teacher_temperature: float = 0.02
+    false_negative_margin: float | None = None
+    same_source_batch_size: int = 0
+    same_source_field: str = "task_name"
     _loss_metrics: dict[str, float] = {}
     _profiler: StepProfiler | None = None
     _step_tokens: int = 0
@@ -556,6 +585,9 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         same_tower_negatives: bool = False,
         spread_out_weight: float = 0.0,
         teacher_temperature: float = 0.02,
+        false_negative_margin: float | None = None,
+        same_source_batch_size: int = 0,
+        same_source_field: str = "task_name",
         **kwargs: Any,
     ) -> None:
         if micro_batch_size <= 0:
@@ -564,15 +596,26 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             raise ValueError("loss weights must be non-negative")
         if feature_projection not in ("learned", "truncate"):
             raise ValueError("feature_projection must be learned or truncate")
-        distilling = distill_weight > 0 or feature_distill_weight > 0
-        if distilling and not teacher_embeddings:
-            raise ValueError("distillation requires teacher_embeddings")
+        if same_source_batch_size < 0:
+            raise ValueError("same_source_batch_size must be non-negative")
+        uses_teacher = (
+            distill_weight > 0
+            or feature_distill_weight > 0
+            or false_negative_margin is not None
+        )
+        if uses_teacher and not teacher_embeddings:
+            raise ValueError(
+                "distillation and false-negative masking require teacher_embeddings"
+            )
         super().__init__(**kwargs)
         self.teacher = (
             np.load(teacher_embeddings, mmap_mode="r")
-            if teacher_embeddings and distilling
+            if teacher_embeddings and uses_teacher
             else None
         )
+        self.false_negative_margin = false_negative_margin
+        self.same_source_batch_size = same_source_batch_size
+        self.same_source_field = same_source_field
         self.distill_weight = distill_weight
         self.feature_distill_weight = feature_distill_weight
         self.feature_head_lr = feature_head_lr
@@ -617,6 +660,42 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
                 torch.randn(head.weight.shape, generator=generator) / math.sqrt(width)
             )
         return head.to(self.args.device)
+
+    def get_train_dataloader(self):
+        if not self.same_source_batch_size:
+            return super().get_train_dataloader()
+        dataset = self.train_dataset
+        assert dataset is not None
+        sampler = SameSourceBatchSampler(
+            [str(source) for source in dataset[self.same_source_field]],
+            per_device_batch_size=self.args.per_device_train_batch_size,
+            slot_rows=self.same_source_batch_size,
+            world_size=dist.get_world_size() if _is_distributed() else 1,
+            rank=dist.get_rank() if _is_distributed() else 0,
+            seed=int(self.args.seed),
+        )
+        if is_rank_zero():
+            print(
+                json.dumps(
+                    {
+                        "vlm_embedding_same_source": {
+                            "slot_rows": self.same_source_batch_size,
+                            "field": self.same_source_field,
+                            "sources": len(sampler.counts),
+                            "steps_per_epoch": len(sampler),
+                        }
+                    }
+                ),
+                flush=True,
+            )
+        kwargs = self._ray_dataloader_kwargs(training=True)
+        kwargs.pop("drop_last", None)
+        return DataLoader(
+            dataset,
+            batch_sampler=sampler,
+            collate_fn=self.data_collator,
+            **kwargs,
+        )
 
     def create_optimizer(self, model: nn.Module | None = None) -> Any:
         optimizer = super().create_optimizer(model)
@@ -735,6 +814,23 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
         """InfoNCE over the global batch plus the configured regularizer and teacher terms."""
 
         mask = build_candidate_mask(metadata)
+        teacher = (
+            self._teacher_rows(metadata, rows.device)
+            if self.teacher is not None
+            else None
+        )
+        fn_metrics: dict[str, float] = {}
+        if self.false_negative_margin is not None:
+            assert teacher is not None
+            keep = teacher_false_negative_mask(
+                teacher[:, 0], teacher[:, 1], teacher[:, 2], self.false_negative_margin
+            ).cpu()
+            allowed = mask.clone()
+            allowed[torch.arange(mask.shape[0]), torch.arange(mask.shape[0])] = False
+            fn_metrics["mask/false_negative_fraction"] = float(
+                (allowed & ~keep).sum() / allowed.sum().clamp(min=1)
+            )
+            mask = mask & keep
         contrastive = contrastive_embedding_loss(
             rows[:, 0],
             rows[:, 1],
@@ -744,14 +840,16 @@ class CachedLFMVLMEmbeddingTrainer(LFMVLMEmbeddingTrainer):
             same_tower=self.same_tower_negatives,
         )
         loss = contrastive
-        self._loss_metrics = {"loss/contrastive": float(contrastive.detach())}
+        self._loss_metrics = {
+            "loss/contrastive": float(contrastive.detach()),
+            **fn_metrics,
+        }
         if self.spread_out_weight > 0:
             spread = spread_out_loss(rows[:, 0], rows[:, 1])
             self._loss_metrics["loss/spread"] = float(spread.detach())
             loss = loss + self.spread_out_weight * spread
-        if self.teacher is None:
+        if teacher is None:
             return loss
-        teacher = self._teacher_rows(metadata, rows.device)
         if self.distill_weight > 0:
             distill = distillation_loss(
                 rows[:, 0],
@@ -1154,6 +1252,13 @@ def vlm_embedding_run(
             same_tower_negatives=bool(train_config.get("same_tower_negatives", False)),
             spread_out_weight=float(train_config.get("spread_out_weight", 0.0)),
             teacher_temperature=float(train_config.get("teacher_temperature", 0.02)),
+            false_negative_margin=(
+                None
+                if train_config.get("false_negative_margin") in (None, "", "none")
+                else float(train_config["false_negative_margin"])
+            ),
+            same_source_batch_size=int(train_config.get("same_source_batch_size", 0)),
+            same_source_field=str(train_config.get("same_source_field", "task_name")),
         )
     else:
         if (
