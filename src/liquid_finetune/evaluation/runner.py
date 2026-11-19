@@ -211,7 +211,10 @@ def stage_checkpoint_for_eval(
         shutil.rmtree(stale, ignore_errors=True)
 
     unwrapped = model.module if hasattr(model, "module") else model
-    unwrapped.save_pretrained(str(ckpt_path))
+    from liquid_finetune.checkpointing.hf_export import original_model_class_for_save
+
+    with original_model_class_for_save(unwrapped):
+        unwrapped.save_pretrained(str(ckpt_path))
 
     for bench in benchmarks:
         processor = getattr(bench, "tokenizer", None) or getattr(
