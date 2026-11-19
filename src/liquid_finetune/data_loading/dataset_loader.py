@@ -7,6 +7,7 @@ from .validate_dataset_format import (
     find_local_files,
     get_source_type,
     quick_validate_schema,
+    split_shards,
     validate_dataset_format,
 )
 
@@ -115,6 +116,9 @@ class DatasetLoader:
 
         if source_type == "parquet":
             local_parquet_files = find_local_files(path, "*.parquet", "*.pq")
+            local_parquet_files = (
+                split_shards(local_parquet_files, split) or local_parquet_files
+            )
             if local_parquet_files:
                 parquet_files = [str(file) for file in local_parquet_files]
                 console.print(
