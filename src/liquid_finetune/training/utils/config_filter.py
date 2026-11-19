@@ -44,6 +44,34 @@ VLM_RUNTIME_EXCLUDED_KEYS = {
 }
 
 
+def _translate_warmup_ratio(filtered: dict[str, Any], valid_keys: set[str]) -> None:
+    """Map ``warmup_ratio`` onto ``warmup_steps`` when the config class dropped it.
+
+    Transformers 5.x removed ``TrainingArguments(warmup_ratio=...)``; a float
+    ``warmup_steps`` below 1 is now read as the warmup fraction. Without this
+    the key would be filtered out below and every run would silently train
+    without warmup.
+    """
+    if "warmup_ratio" not in filtered or "warmup_ratio" in valid_keys:
+        return
+    if "warmup_steps" not in valid_keys:
+        return
+    warmup_ratio = filtered.pop("warmup_ratio")
+    if warmup_ratio is None:
+        return
+    if filtered.get("warmup_steps"):
+        logger.warning(
+            "Both warmup_ratio=%s and warmup_steps=%s are set; using warmup_steps",
+            warmup_ratio,
+            filtered["warmup_steps"],
+        )
+        return
+    warmup_ratio = float(warmup_ratio)
+    if not 0 <= warmup_ratio < 1:
+        raise ValueError(f"warmup_ratio must be in [0, 1), got {warmup_ratio}")
+    filtered["warmup_steps"] = warmup_ratio
+
+
 def filter_runtime_config_kwargs(
     config: dict[str, Any],
     *,
@@ -55,6 +83,7 @@ def filter_runtime_config_kwargs(
         return filtered, []
 
     valid_keys = set(inspect.signature(config_cls.__init__).parameters) - {"self"}
+    _translate_warmup_ratio(filtered, valid_keys)
     dropped = sorted(k for k in filtered if k not in valid_keys)
     if dropped:
         logger.warning(

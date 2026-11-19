@@ -216,7 +216,7 @@ def load_tokenizer(
 ) -> AutoTokenizer:
     """Load only the tokenizer (lightweight, no model weights)."""
     model_id = _resolve_model_id(model_name)
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     return _apply_chat_template_override(
         tokenizer,
         model_name=model_name,
@@ -245,7 +245,9 @@ def load_model(
     model_id = _resolve_model_id(model_name)
     logger.info(f"Loading model: {model_id}")
 
-    config = AutoConfig.from_pretrained(model_id)
+    # LFM3 ships its modeling code with the checkpoint (``auto_map``), like the
+    # VLM and retrieval paths below; it cannot be loaded without remote code.
+    config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
     normalized_model_config = normalize_model_config_overrides(config, model_config)
     if normalized_model_config:
         for key, value in normalized_model_config.items():
@@ -259,6 +261,7 @@ def load_model(
         config=config,
         dtype=torch.bfloat16,
         attn_implementation=attn_impl,
+        trust_remote_code=True,
     )
     _enforce_lfm_tied_word_embeddings(model)
     model.config.use_cache = False
@@ -274,7 +277,7 @@ def load_model(
     else:
         logger.info("Skipping memory-efficient causal LM loss install")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     tokenizer = _apply_chat_template_override(
         tokenizer,
         model_name=model_name,
