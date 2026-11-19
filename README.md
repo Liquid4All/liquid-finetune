@@ -1082,6 +1082,36 @@ assistant completion. These options require a chat template with
 the bundled LFM templates include them. They are not used for plain-text SFT
 rows.
 
+### LFM3 multi-token prediction (MTP) heads
+
+`liquid-prepare-mtp` turns an LFM3 checkpoint into a starting point for training
+MTP draft modules (for speculative decoding). The output is an ordinary
+checkpoint directory: `config.json` maps `AutoModelForCausalLM` to the bundled
+`modeling_lfm3_mtp.Lfm3ForCausalLMWithMTP`, and the weights gain `mtp.*` tensors
+laid out like Qwen3.5-style MTP (`pre_fc_norm_embedding`, `pre_fc_norm_hidden`,
+`fc`, one decoder layer, `norm`; logits through the shared LM head).
+
+```bash
+liquid-prepare-mtp /path/to/lfm3-checkpoint ./checkpoints/lfm3-mtp --mode heads
+liquid-finetune job_configs/lfm3_mtp_heads_example.yaml
+```
+
+- `--mode heads` freezes the backbone and trains only the MTP module, so the
+  model's own outputs do not change. `--mode joint` trains main loss +
+  `--loss-weight` x MTP loss.
+- `--mode add-module` appends the next sequential module (up to three, each
+  drafting one more token ahead), initialised from the last one, and trains
+  only the new module.
+- `--objective soft` uses Soft-MTP gradient routing: each module learns the
+  main model's own next-token distribution instead of the one-hot label.
+- The first module is initialised from the last full-attention layer
+  (`--init-from-layer` to change it).
+
+The MTP model computes both losses itself over supervised positions, so the
+memory-efficient LM loss is not installed for it. Exports keep the `mtp.*`
+tensors and the modeling file; inference without labels is the unchanged LFM3
+forward.
+
 ## Contributing
 
 ### Testing

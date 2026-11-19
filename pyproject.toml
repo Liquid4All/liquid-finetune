@@ -43,6 +43,7 @@ rl-env = [
 liquid-finetune = "liquid_finetune:main"
 liquid-export-manual-sharded-checkpoint = "liquid_finetune.cli.export_manual_sharded_checkpoint:main"
 liquid-export-gguf = "liquid_finetune.cli.export_gguf:main"
+liquid-prepare-mtp = "liquid_finetune.models.lfm3_mtp.prepare:main"
 liquid-qat-matrix = "liquid_finetune.quantization.qat.matrix:main"
 liquid-qat-report = "liquid_finetune.quantization.qat.report:main"
 
