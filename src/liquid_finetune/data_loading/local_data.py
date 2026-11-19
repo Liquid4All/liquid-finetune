@@ -5,9 +5,11 @@ from trl.data_utils import pack_dataset
 from liquid_finetune.checkpointing.model_info import get_model_family
 from liquid_finetune.data_loading.tokenize_data import tokenize_dpo, tokenize_sft
 from liquid_finetune.data_loading.validate_dataset_format import (
+    find_local_files,
     get_row_filter,
     get_source_type,
     normalize_columns,
+    split_shards,
 )
 from liquid_finetune.data_loading.validate_tool_format import get_tool_normalizer
 
@@ -33,9 +35,16 @@ def _load(loader, path: str, subset: str | None, split: str) -> Dataset:
         raise ValueError(
             f"Local single-GPU training does not support dataset source: {path}"
         )
+    data_files = path
+    if builder == "parquet":
+        selected = split_shards(find_local_files(path, "*.parquet", "*.pq"), split)
+        if selected:
+            # Split-named shards (train-*.parquet, validation-*.parquet, ...):
+            # hand datasets only the requested split's files.
+            data_files = {split: [str(file) for file in selected]}
     if loader.limit is not None and "[" not in split and "+" not in split:
         split = f"{split}[:{loader.limit}]"
-    return load_dataset(builder, data_files=path, split=split)
+    return load_dataset(builder, data_files=data_files, split=split)
 
 
 def _prepare(loader, dataset: Dataset) -> Dataset:

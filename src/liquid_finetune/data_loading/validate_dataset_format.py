@@ -44,6 +44,38 @@ def find_local_files(dataset_path: str, *patterns: str) -> list[Path]:
     return sorted(matches)
 
 
+# File-name prefixes Hugging Face datasets maps to each split.
+_SPLIT_NAME_ALIASES = {
+    "train": ("train", "training"),
+    "validation": ("validation", "valid", "val", "dev"),
+    "test": ("test", "testing", "eval", "evaluation"),
+}
+
+
+def _file_split_prefix(file: Path, aliases: tuple[str, ...]) -> bool:
+    name = file.name.lower()
+    return any(
+        name == alias or name.startswith((f"{alias}-", f"{alias}_", f"{alias}."))
+        for alias in aliases
+    )
+
+
+def split_shards(files: list[Path], split: str | None) -> list[Path] | None:
+    """Return the shards named for ``split`` (``train-*.parquet``, ``validation-*``...).
+
+    A directory such as ``train-00000.parquet`` + ``validation-00000.parquet``
+    holds two splits; reading every file would train on the validation rows and
+    evaluate on the training rows. Returns ``None`` when no file is named for
+    ``split``, so plain shard directories keep being read as one split.
+    """
+    if not split or not files:
+        return None
+    split_name = split.split("[", 1)[0].strip().lower()
+    aliases = _SPLIT_NAME_ALIASES.get(split_name, (split_name,))
+    selected = [file for file in files if _file_split_prefix(file, aliases)]
+    return selected or None
+
+
 def get_source_type(dataset_path: str) -> str:
     """Determine the source type for display and loading logic."""
     expanded_path = Path(dataset_path).expanduser()
