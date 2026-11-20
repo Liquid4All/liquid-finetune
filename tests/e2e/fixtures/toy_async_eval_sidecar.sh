@@ -6,7 +6,6 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=2
-#SBATCH --cpus-per-gpu=14
 #SBATCH --time=00:45:00
 #SBATCH --output=logs/async_eval_toy/OUT_sidecar_%j.log
 #SBATCH --error=logs/async_eval_toy/ERR_sidecar_%j.log

@@ -5,7 +5,6 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-task=1
-#SBATCH --cpus-per-gpu=14
 #SBATCH --time=00:20:00
 #SBATCH --output=logs/eval_standalone_toy/OUT_%j.log
 #SBATCH --error=logs/eval_standalone_toy/ERR_%j.log
