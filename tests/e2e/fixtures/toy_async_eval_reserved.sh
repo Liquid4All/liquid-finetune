@@ -6,7 +6,6 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus-per-node=3
-#SBATCH --cpus-per-gpu=14
 #SBATCH --time=00:45:00
 #SBATCH --output=logs/async_eval_toy/OUT_reserved_%j.log
 #SBATCH --error=logs/async_eval_toy/ERR_reserved_%j.log
