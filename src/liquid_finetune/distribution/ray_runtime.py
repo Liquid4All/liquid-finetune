@@ -36,6 +36,13 @@ def normalize_visible_devices() -> None:
     os.environ.pop("CUDA_VISIBLE_DEVICES", None)
 
 
+def set_training_visible_devices(visible_devices: str) -> None:
+    """Restrict training devices for CUDA and ROCm from one canonical value."""
+    os.environ["CUDA_VISIBLE_DEVICES"] = visible_devices
+    if _is_rocm_torch():
+        os.environ["HIP_VISIBLE_DEVICES"] = visible_devices
+
+
 def normalize_uv_project_path(base_dir: str | os.PathLike | None = None) -> None:
     """Make UV_PROJECT absolute before Ray changes process working dirs."""
     uv_project = os.environ.get("UV_PROJECT")
@@ -65,6 +72,10 @@ def worker_process_setup_hook() -> None:
     logging.getLogger("ray.train").setLevel(logging.ERROR)
     logging.getLogger("ray").setLevel(logging.ERROR)
     warnings.filterwarnings("ignore")
+
+    triton_cache = os.environ.get("TRITON_CACHE_DIR")
+    if triton_cache:
+        os.environ["TRITON_CACHE_DIR"] = str(Path(triton_cache) / str(os.getpid()))
 
     for key in ("TMPDIR", "TORCH_EXTENSIONS_DIR", "TRITON_CACHE_DIR"):
         path = os.environ.get(key)

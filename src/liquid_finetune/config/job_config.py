@@ -302,6 +302,7 @@ class JobConfig(BaseModel):
     project_name: str | None = None
     job_name: str | None = None
     model_name: str = "LFM2-1.2B"
+    model_revision: str | None = None
     training_type: TrainingType = "sft"
     dataset: DatasetConfig
     training_config: TrainingConfig = Field(default_factory=TrainingConfig)
@@ -453,6 +454,7 @@ class _ResolvedConfigValue:
 class ResolvedJobConfig:
     job_name: str
     model_name: str
+    model_revision: str | None
     training_type: TrainingType
     dataset: DatasetLoader | tuple[Dataset, Dataset] | None
     training_config: Any
@@ -470,6 +472,7 @@ class ResolvedJobConfig:
         dataset_to_use = dataset if dataset is not None else self.dataset
         return {
             "model_name": self.model_name,
+            "model_revision": self.model_revision,
             "job_name": self.job_name,
             "training_type": self.training_type,
             "training_config": self.training_config.value,

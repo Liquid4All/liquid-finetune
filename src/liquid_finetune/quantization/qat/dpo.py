@@ -19,19 +19,17 @@ def prepare_dpo_reference_model(
 ) -> ModelT | None:
     """Create the explicit DPO reference only when TRL cannot reuse the policy."""
     qat_config = train_config.get("qat")
-    if qat_config is None:
-        return None
     quantize_reference = (
         qat_config.get("quantize_reference", True)
         if isinstance(qat_config, Mapping)
-        else qat_config.quantize_reference
+        else getattr(qat_config, "quantize_reference", True)
     )
-    if policy_uses_peft and quantize_reference:
+    if policy_uses_peft and (qat_config is None or quantize_reference):
         # TRL computes reference log-probabilities with the policy adapters disabled.
         # The shared base model already contains the same fake-quantization hooks.
         return None
 
     reference = load_model()
-    if quantize_reference:
+    if qat_config is not None and quantize_reference:
         prepare_model_for_qat(reference, dict(train_config), is_vlm=is_vlm)
     return reference

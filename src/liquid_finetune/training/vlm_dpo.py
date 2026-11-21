@@ -40,6 +40,9 @@ from liquid_finetune.training.utils.vlm_optimizer import (
     freeze_vlm_modules,
     log_per_group_lrs,
 )
+from liquid_finetune.training.utils.vlm_parameter_participation import (
+    VLMParameterParticipationMixin,
+)
 from liquid_finetune.training.utils.worker_setup import (
     init_tracking_from_config,
     resolve_train_eval_datasets,
@@ -105,7 +108,7 @@ class PathLoadingVisionPreferenceCollator(DataCollatorForVisionPreference):
                     img.close()
 
 
-class LFMVLMDPOTrainer(RayDataLoaderMixin, DPOTrainer):
+class LFMVLMDPOTrainer(VLMParameterParticipationMixin, RayDataLoaderMixin, DPOTrainer):
     """VLM DPO trainer with Ray dataloading and VLM optimizer groups."""
 
     def __init__(
@@ -199,7 +202,9 @@ def vlm_dpo_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
     grad_accum = train_config_filtered.get("gradient_accumulation_steps", 1)
     epochs = train_config_filtered.get("num_train_epochs", 1)
     steps_per_epoch = math.ceil(num_samples / train_batch_size)
-    max_steps = max(1, steps_per_epoch * epochs // grad_accum)
+    # ``num_train_epochs`` is materialized as a float; Transformers expects an
+    # integer ``max_steps`` when that value drives the loop directly.
+    max_steps = max(1, int(steps_per_epoch * epochs // grad_accum))
 
     train_config_filtered.pop("num_train_epochs", None)
     if not train_config_filtered.get("dataloader_num_workers", 0):
@@ -219,6 +224,7 @@ def vlm_dpo_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
 
     model, processor = load_vlm_model(
         model_name,
+        revision=training_config.get("model_revision"),
         min_image_tokens=min_image_tokens,
         max_image_tokens=max_image_tokens,
         do_image_splitting=do_image_splitting,
@@ -235,6 +241,8 @@ def vlm_dpo_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
         policy_uses_peft=bool(peft_config or adapter_path),
         load_model=lambda: load_vlm_model(
             model_name,
+            revision=training_config.get("model_revision"),
+            min_image_tokens=min_image_tokens,
             max_image_tokens=max_image_tokens,
             do_image_splitting=do_image_splitting,
         )[0],
