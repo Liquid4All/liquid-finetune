@@ -1,4 +1,5 @@
 import pytest
+import torch
 
 from conftest import (
     assert_checkpoints_exist,
@@ -10,6 +11,9 @@ from conftest import (
     run_e2e_training,
     run_local_e2e_training,
 )
+from liquid_finetune.checkpointing.model_loading import load_model
+from liquid_finetune.training.peft.peft import apply_peft_to_model
+from liquid_finetune.training.peft.peft_configs import DEFAULT_LORA
 
 pytestmark = pytest.mark.dense
 
@@ -66,6 +70,48 @@ class TestDenseDPOLoRA:
         config_path = str(FIXTURES / "e2e_dpo_lora.yaml")
         run_local_e2e_training(config_path, e2e_output_dir)
         assert_local_model_saved(e2e_output_dir)
+
+
+class TestLFM3:
+    @requires_gpu
+    def test_checkpoint_generation_and_lora_backward(self):
+        model, tokenizer = load_model("LiquidAI/LFM3-1.7B")
+        model.cuda()
+
+        prompt = tokenizer.apply_chat_template(
+            [{"role": "user", "content": "Count to three."}],
+            tokenize=True,
+            add_generation_prompt=True,
+            return_tensors="pt",
+        )["input_ids"].cuda()
+        with torch.no_grad():
+            generated = model.generate(prompt, max_new_tokens=2, do_sample=False)
+        assert generated.shape[-1] > prompt.shape[-1]
+
+        encoded = tokenizer.apply_chat_template(
+            [
+                {"role": "user", "content": "What is two plus two?"},
+                {"role": "assistant", "content": "Four."},
+            ],
+            tokenize=True,
+            return_dict=True,
+            return_assistant_tokens_mask=True,
+            return_tensors="pt",
+        )
+        labels = encoded["input_ids"].clone()
+        labels[~encoded.pop("assistant_masks").bool()] = -100
+        batch = {key: value.cuda() for key, value in encoded.items()}
+        batch["labels"] = labels.cuda()
+
+        model = apply_peft_to_model(model, DEFAULT_LORA)
+        loss = model(**batch).loss
+        assert torch.isfinite(loss)
+        loss.backward()
+        assert any(
+            parameter.grad is not None
+            for parameter in model.parameters()
+            if parameter.requires_grad
+        )
 
 
 # === Dense DPO full fine-tune ===

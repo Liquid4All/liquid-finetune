@@ -13,6 +13,9 @@ TOOL_LIST_START = "<|tool_list_start|>"
 TOOL_LIST_END = "<|tool_list_end|>"
 TOOL_RESPONSE_START = "<|tool_response_start|>"
 TOOL_RESPONSE_END = "<|tool_response_end|>"
+LFM3_TOOL_CALL_START = "<tool_call>"
+LFM3_TOOL_CALL_END = "</tool_call>"
+LFM3_TOOL_MARKERS = {LFM3_TOOL_CALL_START, LFM3_TOOL_CALL_END}
 
 _FOREIGN_TOOL_MARKERS = [
     ("<tool_call>", "Qwen"),
@@ -39,9 +42,11 @@ FOREIGN_MARKERS = [
 ]
 
 
-def has_foreign_tool_markers(text: str) -> str | None:
+def has_foreign_tool_markers(text: str, model_family: str = "lfm2") -> str | None:
     """Return the foreign tool-call format name if known markers are present."""
     for marker, format_name in _FOREIGN_TOOL_MARKERS:
+        if model_family == "lfm3" and marker in LFM3_TOOL_MARKERS:
+            continue
         if marker in text:
             return format_name
     return None
@@ -146,8 +151,12 @@ def validate_tool_format(
     if not format_info.has_tool_calls:
         return issues
 
-    if format_info.has_foreign_markers:
-        markers = ", ".join(format_info.foreign_markers_found)
+    foreign_markers = set(format_info.foreign_markers_found)
+    if model_family == "lfm3":
+        foreign_markers -= LFM3_TOOL_MARKERS
+
+    if foreign_markers:
+        markers = ", ".join(sorted(foreign_markers))
         issues.append(
             ToolFormatIssue(
                 "error",
@@ -157,7 +166,15 @@ def validate_tool_format(
             )
         )
 
-    if format_info.has_structured_tool_calls:
+    if format_info.has_structured_tool_calls and model_family == "lfm3":
+        issues.append(
+            ToolFormatIssue(
+                "info",
+                "STRUCTURED_TOOL_CALLS",
+                "Structured tool calls are native input for the LFM3 chat template.",
+            )
+        )
+    elif format_info.has_structured_tool_calls:
         issues.append(
             ToolFormatIssue(
                 "warning",
@@ -201,7 +218,12 @@ def validate_tool_format(
             )
         )
 
-    if format_info.detected_format == model_family:
+    lfm3_native_markers = (
+        model_family == "lfm3"
+        and bool(format_info.foreign_markers_found)
+        and not foreign_markers
+    )
+    if format_info.detected_format == model_family or lfm3_native_markers:
         issues.append(
             ToolFormatIssue(
                 "info",
@@ -387,9 +409,18 @@ def normalize_tool_format(row: dict, model_family: str) -> dict:
                 new_msg["content"] = content
                 modified = True
 
-        # 3. Convert structured tool_calls to pre-baked content
+        # 3. LFM3's chat template consumes structured calls directly. Older
+        # families require the legacy pre-baked bracket representation.
         if role == "assistant" and "tool_calls" in msg:
             tool_calls = msg["tool_calls"]
+            if model_family == "lfm3":
+                if isinstance(tool_calls, list) and tool_calls:
+                    normalized = _normalize_tool_call_arguments_for_template(tool_calls)
+                    if normalized != tool_calls:
+                        new_msg["tool_calls"] = normalized
+                        modified = True
+                new_messages.append(new_msg)
+                continue
             if tool_calls and isinstance(tool_calls, list) and len(tool_calls) > 0:
                 pythonic = tool_calls_to_pythonic(tool_calls)
                 existing_content = content.strip()
@@ -425,8 +456,8 @@ def get_tool_normalizer(model_family: str):
 
 
 def _tool_call_must_be_first(model_family: str) -> bool:
-    """Legacy LFM2 expects tool-call-first text; LFM2.5 permits prose first."""
-    return model_family != "lfm25"
+    """Legacy LFM2 expects tool-call-first text; newer families permit prose."""
+    return model_family == "lfm2"
 
 
 def validate_tool_calls_in_messages(
@@ -447,7 +478,7 @@ def validate_tool_calls_in_messages(
             continue
 
         # === Foreign Markers ===
-        format_name = has_foreign_tool_markers(content)
+        format_name = has_foreign_tool_markers(content, model_family)
         if format_name:
             raise ValueError(
                 f"Sample {sample_idx}, message {msg_idx}: Found {format_name} tool call markers "
@@ -478,7 +509,10 @@ def validate_tool_calls_in_messages(
         structured_tool_calls = msg.get("tool_calls")
         has_tool_call = (
             isinstance(content, str)
-            and TOOL_CALL_START in content
+            and (
+                TOOL_CALL_START in content
+                or (model_family == "lfm3" and LFM3_TOOL_CALL_START in content)
+            )
             or (
                 role == "assistant"
                 and isinstance(structured_tool_calls, list)
@@ -513,14 +547,15 @@ def validate_tool_calls_in_text(
     model_family: str = "lfm2",
 ) -> None:
     """Validate LFM tool-call formatting in a pre-formatted DPO string."""
-    format_name = has_foreign_tool_markers(text)
+    format_name = has_foreign_tool_markers(text, model_family)
     if format_name:
         raise ValueError(
             f"Sample {sample_idx}, {field}: Found {format_name} tool call markers. "
             f"LFM requires '{TOOL_CALL_START}'/'{TOOL_CALL_END}' markers."
         )
 
-    tool_call_pos = text.find(TOOL_CALL_START)
+    marker = LFM3_TOOL_CALL_START if model_family == "lfm3" else TOOL_CALL_START
+    tool_call_pos = text.find(marker)
     if tool_call_pos == -1:
         return
 

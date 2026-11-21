@@ -1,6 +1,7 @@
 import torch
 from liquid_finetune.data_loading.tokenize_data import (
     _final_assistant_span_mask,
+    create_vlm_collate_fn,
     tokenize_and_pack_sft,
     tokenize_dpo,
     tokenize_dpo_dataset,
@@ -277,6 +278,54 @@ def test_tokenize_and_pack_sft_preserves_assistant_masks(monkeypatch):
     assert len(rows) == 1
     assert rows[0]["input_ids"] == [1, 2, 3, 4, 5]
     assert rows[0]["assistant_masks"] == [0, 1, 1, 0, 1]
+
+
+class _FakeVLMProcessor:
+    image_token_id = 99
+    video_token_id = 98
+
+    class tokenizer:
+        unk_token_id = None
+
+        @staticmethod
+        def encode(text, add_special_tokens=False):
+            del text, add_special_tokens
+            return [10, 11]
+
+        @staticmethod
+        def convert_tokens_to_ids(token):
+            return {"<|im_end|>": 4, "<|image|>": 99, "<|video|>": 98}.get(token)
+
+    def apply_chat_template(self, conversations, **kwargs):
+        del conversations
+        batch = {
+            "input_ids": torch.tensor([[1, 99, 10, 11, 3, 4, 0]]),
+            "attention_mask": torch.tensor([[1, 1, 1, 1, 1, 1, 0]]),
+        }
+        if kwargs.get("return_assistant_tokens_mask"):
+            batch["assistant_masks"] = torch.tensor([[0, 0, 0, 0, 1, 1, 0]])
+        return batch
+
+
+def test_vlm_collator_masks_non_assistant_media_and_padding_tokens():
+    sample = {
+        "messages": [
+            {"role": "user", "content": "Describe the image."},
+            {"role": "assistant", "content": "Red."},
+        ]
+    }
+    batch = create_vlm_collate_fn(_FakeVLMProcessor())([sample])
+    assert batch["labels"].tolist() == [[-100, -100, -100, -100, 3, 4, -100]]
+
+
+def test_vlm_collator_rejects_unsafe_multimodal_truncation():
+    collator = create_vlm_collate_fn(_FakeVLMProcessor(), max_length=6)
+    try:
+        collator([{"messages": []}])
+    except ValueError as exc:
+        assert "truncating image placeholder spans is unsafe" in str(exc)
+    else:
+        raise AssertionError("Expected oversized VLM batch to be rejected")
 
 
 class _VariableLengthTokenizer(_FakeTokenizer):

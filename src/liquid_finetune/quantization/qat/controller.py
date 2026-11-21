@@ -247,6 +247,11 @@ def prepare_model_for_qat(
                 target_parameters[tensor_name] = getattr(module, parameter_name)
             continue
         if not isinstance(module, nn.Linear):
+            leaf = name.rsplit(".", 1)[-1]
+            if leaf in _EXCLUDED_LEAVES and isinstance(
+                getattr(module, "weight", None), nn.Parameter
+            ):
+                report.excluded.append(name)
             continue
         if _should_quantize_linear(name, profile, is_vlm):
             if _is_compatible(module.weight, profile):

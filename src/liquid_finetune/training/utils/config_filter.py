@@ -55,6 +55,16 @@ def filter_runtime_config_kwargs(
         return filtered, []
 
     valid_keys = set(inspect.signature(config_cls.__init__).parameters) - {"self"}
+    # Transformers 5 folded ``warmup_ratio`` into the float-valued
+    # ``warmup_steps`` argument: values below 1 are interpreted as a ratio.
+    # Preserve existing LEAP configs (and user overrides) across that rename.
+    if (
+        "warmup_ratio" in filtered
+        and "warmup_ratio" not in valid_keys
+        and "warmup_steps" in valid_keys
+    ):
+        filtered.setdefault("warmup_steps", filtered["warmup_ratio"])
+        filtered.pop("warmup_ratio")
     dropped = sorted(k for k in filtered if k not in valid_keys)
     if dropped:
         logger.warning(
