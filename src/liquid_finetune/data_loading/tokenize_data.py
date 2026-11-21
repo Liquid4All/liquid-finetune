@@ -137,7 +137,7 @@ def create_vlm_collate_fn(
                 "tokenize": True,
                 "return_dict": True,
                 "return_tensors": "pt",
-                "padding": True,
+                "processor_kwargs": {"padding": True},
             }
             if assistant_only_loss:
                 template_kwargs["return_assistant_tokens_mask"] = True

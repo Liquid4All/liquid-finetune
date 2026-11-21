@@ -1,6 +1,4 @@
 import pytest
-import torch
-from PIL import Image
 
 from conftest import (
     assert_checkpoints_exist,
@@ -11,10 +9,6 @@ from conftest import (
     run_local_e2e_training,
     run_e2e_training,
 )
-from liquid_finetune.checkpointing.model_loading import load_vlm_model
-from liquid_finetune.data_loading.tokenize_data import create_vlm_collate_fn
-from liquid_finetune.training.peft.peft import apply_peft_to_model
-from liquid_finetune.training.peft.peft_configs import DEFAULT_VLM_LORA
 
 pytestmark = pytest.mark.vlm
 
@@ -41,39 +35,16 @@ class TestVLMLoRA:
 
 class TestLFM3VL:
     @requires_gpu
-    def test_checkpoint_collation_and_lora_backward(self):
-        model, processor = load_vlm_model("LiquidAI/LFM3-VL-2B", max_image_tokens=256)
-        samples = [
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "image": Image.new("RGB", (96, 64), "red"),
-                            },
-                            {"type": "text", "text": "What color is this?"},
-                        ],
-                    },
-                    {"role": "assistant", "content": "Red."},
-                ]
-            }
-        ]
-        batch = create_vlm_collate_fn(processor, max_length=1024)(samples)
-        assert torch.all(
-            batch["labels"][batch["input_ids"] == processor.image_token_id] == -100
+    def test_training_completes_and_checkpoints(self, e2e_output_dir, tmp_path):
+        config_path = _write_vlm_sft_config(
+            tmp_path,
+            "e2e_vlm_lora.yaml",
+            model_name="LiquidAI/LFM3-VL-2B",
+            save_checkpoints=True,
         )
-
-        model = apply_peft_to_model(model.cuda(), DEFAULT_VLM_LORA)
-        loss = model(**{key: value.cuda() for key, value in batch.items()}).loss
-        assert torch.isfinite(loss)
-        loss.backward()
-        assert any(
-            parameter.grad is not None
-            for parameter in model.parameters()
-            if parameter.requires_grad
-        )
+        result = run_e2e_training(config_path, e2e_output_dir)
+        assert_training_result(result, check_loss_trend=False)
+        assert_checkpoints_exist(e2e_output_dir)
 
 
 # === VLM SFT full fine-tune ===
@@ -92,7 +63,14 @@ class TestVLMFull:
 # === VLM SFT with string assistant content + multi-image ===
 
 
-def _write_vlm_sft_config(tmp_path, fixture_name, *, string_assistant=False):
+def _write_vlm_sft_config(
+    tmp_path,
+    fixture_name,
+    *,
+    string_assistant=False,
+    model_name=None,
+    save_checkpoints=False,
+):
     """Create a self-contained VLM SFT fixture from a shipped config."""
     import json
 
@@ -138,6 +116,20 @@ def _write_vlm_sft_config(tmp_path, fixture_name, *, string_assistant=False):
 
     config = yaml.safe_load((FIXTURES / fixture_name).read_text())
     config["dataset"]["path"] = str(ds_path)
+    if model_name is not None:
+        config["project_name"] = "e2e_lfm3_vlm"
+        config["model_name"] = model_name
+        config["training_config"].update(
+            {
+                "logging_steps": 2,
+                "gradient_accumulation_steps": 1,
+                "learning_rate": 5e-5,
+                "max_image_tokens": 256,
+                "max_length": 1024,
+            }
+        )
+    if save_checkpoints:
+        config["training_config"]["save_strategy"] = "epoch"
     if string_assistant:
         config["project_name"] = "e2e_vlm_string"
         config["training_config"]["gradient_checkpointing"] = True
