@@ -33,10 +33,16 @@ def _find_template(seq, template):
             yield i
 
 
-def create_vlm_collate_fn(processor):
-    """Create a collate function with assistant-only label masking.
+def create_vlm_collate_fn(
+    processor,
+    *,
+    assistant_only_loss: bool = True,
+    max_length: int | None = None,
+):
+    """Create a processor-aware VLM collator.
 
-    Only assistant content + <|im_end|> contribute to loss.
+    Native chat-template assistant masks are preferred when available. Image,
+    video, and padding tokens never contribute to the language-model loss.
     Images are loaded as PIL and passed to the processor for resize/tiling.
     Bad samples are skipped with a warning instead of crashing the batch.
     """
@@ -47,6 +53,21 @@ def create_vlm_collate_fn(processor):
         "<|im_start|>assistant\n", add_special_tokens=False
     )
     end_token_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+
+    multimodal_token_ids = {
+        token_id
+        for token_id in (
+            getattr(processor, "image_token_id", None),
+            getattr(processor, "video_token_id", None),
+        )
+        if isinstance(token_id, int) and token_id >= 0
+    }
+    unknown_token_id = getattr(tokenizer, "unk_token_id", None)
+    vocabulary = tokenizer.get_vocab() if hasattr(tokenizer, "get_vocab") else {}
+    for token in ("<|image|>", "<|video|>", "<|image_pad|>", "<|video_pad|>"):
+        token_id = vocabulary.get(token)
+        if isinstance(token_id, int) and token_id >= 0 and token_id != unknown_token_id:
+            multimodal_token_ids.add(token_id)
 
     def _build_labels(input_ids):
         """Mask everything except assistant content + <|im_end|> with -100."""
@@ -84,7 +105,10 @@ def create_vlm_collate_fn(processor):
             loaded_images = []
             try:
                 for message in sample_copy:
-                    for content in message["content"]:
+                    content_items = message["content"]
+                    if not isinstance(content_items, list):
+                        continue
+                    for content in content_items:
                         if content["type"] == "image" and isinstance(
                             content["image"], str
                         ):
@@ -109,14 +133,44 @@ def create_vlm_collate_fn(processor):
             )
 
         try:
+            template_kwargs = {
+                "tokenize": True,
+                "return_dict": True,
+                "return_tensors": "pt",
+                "processor_kwargs": {"padding": True},
+            }
+            if assistant_only_loss:
+                template_kwargs["return_assistant_tokens_mask"] = True
+
             batch = processor.apply_chat_template(
                 valid_samples,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt",
-                padding=True,
+                **template_kwargs,
             )
-            batch["labels"] = _build_labels(batch["input_ids"])
+            input_ids = batch["input_ids"]
+            if max_length is not None and input_ids.shape[-1] > max_length:
+                raise ValueError(
+                    f"VLM batch has {input_ids.shape[-1]} tokens, exceeding "
+                    f"max_length={max_length}. Reduce image resolution / "
+                    "max_image_tokens or increase max_length; truncating image "
+                    "placeholder spans is unsafe."
+                )
+
+            assistant_masks = batch.pop("assistant_masks", None)
+            if assistant_only_loss:
+                labels = _build_labels(input_ids)
+                if assistant_masks is not None:
+                    labels = input_ids.clone()
+                    labels[~assistant_masks.to(dtype=torch.bool)] = -100
+            else:
+                labels = input_ids.clone()
+
+            attention_mask = batch.get("attention_mask")
+            if attention_mask is not None:
+                labels[~attention_mask.to(dtype=torch.bool)] = -100
+            for token_id in multimodal_token_ids:
+                labels[input_ids == token_id] = -100
+
+            batch["labels"] = labels
             return batch
 
         finally:

@@ -1,6 +1,8 @@
 import pytest
+from transformers import TrainingArguments
 
 from liquid_finetune import run_config
+from liquid_finetune.checkpointing.model_info import get_model_family
 from liquid_finetune.config import (
     DatasetConfig,
     EvalConfig,
@@ -15,7 +17,10 @@ from liquid_finetune.config import (
 from liquid_finetune.distribution.distributed_configs import (
     strip_distributed_training_config,
 )
+from liquid_finetune.data_loading.validate_tool_format import normalize_tool_format
 from liquid_finetune.training.default_configs import TRAINING_DEFAULTS
+from liquid_finetune.training.peft.peft_configs import DEFAULT_LORA, DEFAULT_VLM_LORA
+from liquid_finetune.training.utils.config_filter import filter_runtime_config_kwargs
 
 from conftest import BASE_DPO_DATASET, BASE_SFT_DATASET, write_config
 
@@ -84,6 +89,45 @@ class TestVLMDataLoaderDefaults:
         assert cfg["dataloader_prefetch_factor"] == 2
         assert cfg["dataloader_persistent_workers"] is True
         assert cfg["dataloader_pin_memory"] is True
+
+
+class TestLFM3Compatibility:
+    def test_lfm3_compatibility_defaults(self):
+        assert get_model_family("LiquidAI/LFM3-1.7B") == "lfm3"
+        assert get_model_family("LiquidAI/LFM3-VL-2B") == "lfm3"
+        for config in (DEFAULT_LORA, DEFAULT_VLM_LORA):
+            targets = set(config.target_modules)
+            assert {"self_attn.o_proj", "feed_forward.w1", "conv.out_proj"} <= targets
+
+    def test_transformers_5_warmup_ratio_compatibility(self):
+        filtered, dropped = filter_runtime_config_kwargs(
+            {"warmup_ratio": 0.2},
+            excluded_keys=set(),
+            config_cls=TrainingArguments,
+        )
+        assert filtered == {"warmup_steps": 0.2}
+        assert dropped == []
+
+    def test_lfm3_native_tool_calls_are_preserved(self):
+        row = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "weather",
+                                "arguments": '{"city": "Paris"}',
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+        normalized = normalize_tool_format(row, "lfm3")
+        arguments = normalized["messages"][0]["tool_calls"][0]["function"]["arguments"]
+        assert arguments == {"city": "Paris"}
 
 
 class TestDirectPythonConfig:

@@ -6,6 +6,8 @@ def is_moe_model_from_name(model_name: str) -> bool:
 def get_model_family(model_name: str) -> str:
     """Return model family for format-specific behavior."""
     model_lower = model_name.lower()
+    if "lfm3" in model_lower:
+        return "lfm3"
     if "2.5" in model_lower:
         return "lfm25"
     if "24b" in model_lower and "2.5" not in model_lower:

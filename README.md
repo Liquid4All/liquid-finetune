@@ -24,9 +24,22 @@
 <a href="#contributing">Contributing</a>
 </p>
 
-Liquid Finetune is a minimal fine-tuning repo for LFM2. It handles dataset
+Liquid Finetune is a minimal fine-tuning repo for Liquid Foundation Models. It handles dataset
 formatting, validation, distributed orchestration, checkpointing, and export
 for local GPU nodes, SLURM clusters, Modal, and Kubernetes/KubeRay.
+
+LFM3 text and vision-language checkpoints require the locked Transformers 5.21
+stack. LFM3-VL uses dynamic-resolution image processing: `max_image_tokens`
+sets the image budget, while `max_length` is enforced after multimodal token
+expansion without truncating image-placeholder spans. VLM SFT uses the
+checkpoint chat template's native assistant mask and never trains on image,
+video, or padding tokens.
+
+Public vLLM releases do not yet include LFM3. LFM3 GRPO with vLLM therefore
+requires a build containing Liquid4All/vllm PRs
+[#123](https://github.com/Liquid4All/vllm/pull/123) and
+[#128](https://github.com/Liquid4All/vllm/pull/128). Set `use_vllm: false` for
+Transformers-local rollouts when that build is unavailable.
 
 For feature requests or custom infrastructure support, reach out to
 [support@liquid.ai](mailto:support@liquid.ai) with your setup.
