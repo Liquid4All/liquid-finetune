@@ -124,6 +124,7 @@ def build_manual_sharded_export_metadata_from_config(
     metadata: dict[str, Any] = {
         "training_config": _json_safe(training_config),
         "base_model_name": training_config.get("model_name"),
+        "base_model_revision": training_config.get("model_revision"),
         "model_config": training_config.get("model_config") or {},
         "max_length": train_config.get("max_length"),
         "chat_template_path": train_config.get("chat_template_path"),

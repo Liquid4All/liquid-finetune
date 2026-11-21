@@ -14,8 +14,12 @@ normalize_visible_devices()
 from trl import GRPOConfig, GRPOTrainer
 
 from liquid_finetune.checkpointing.callback import LiquidCheckpointCallback
-from liquid_finetune.checkpointing.model_loading import load_vlm_model
+from liquid_finetune.checkpointing.model_loading import (
+    load_vlm_model,
+    resolve_cached_model_snapshot,
+)
 from liquid_finetune.data_loading.image_loader import load_image
+from liquid_finetune.data_loading.media_tokens import resolve_media_tokens
 from liquid_finetune.evaluation import (
     create_vlm_benchmarks_from_config,
     make_eval_callback,
@@ -39,10 +43,16 @@ from liquid_finetune.training.utils.logging import (
     get_wandb_run_id,
     is_rank_zero,
 )
+from liquid_finetune.training.utils.generation_config import (
+    apply_model_generation_defaults,
+)
 from liquid_finetune.training.utils.trainer_lifecycle import run_training_safely
 from liquid_finetune.training.utils.vlm_optimizer import (
     build_vlm_param_groups,
     log_per_group_lrs,
+)
+from liquid_finetune.training.utils.vlm_parameter_participation import (
+    VLMParameterParticipationMixin,
 )
 from liquid_finetune.training.utils.worker_setup import (
     init_tracking_from_config,
@@ -53,10 +63,60 @@ from liquid_finetune.training.utils.config_filter import filter_runtime_config_k
 logger = logging.getLogger(__name__)
 
 
+def _configure_media_generation_kwargs(args, processor) -> dict:
+    """Prevent generation of media placeholders in both HF and vLLM rollouts."""
+    media_tokens = resolve_media_tokens(processor)
+    generation_kwargs = dict(args.generation_kwargs or {})
+    if args.use_vllm:
+        generation_kwargs["bad_words"] = sorted(
+            set(generation_kwargs.get("bad_words") or [])
+            | media_tokens["image"]["tokens"]
+            | media_tokens["video"]["tokens"]
+        )
+    else:
+        generation_kwargs["suppress_tokens"] = sorted(
+            set(generation_kwargs.get("suppress_tokens") or [])
+            | media_tokens["image"]["ids"]
+            | media_tokens["video"]["ids"]
+        )
+    args.generation_kwargs = generation_kwargs
+    return media_tokens
+
+
+def _primary_media_token_id(processor, media_type: str, token_ids: set[int]):
+    processor_id = getattr(processor, f"{media_type}_token_id", None)
+    if processor_id in token_ids:
+        return processor_id
+    tokenizer = processor.tokenizer
+    for token in (f"<|{media_type}_pad|>", f"<|{media_type}|>"):
+        token_id = tokenizer.convert_tokens_to_ids(token)
+        if token_id in token_ids:
+            return token_id
+    return None
+
+
+def _collapse_media_token_runs(
+    prompt_ids: list[list[int]], media_token_ids: set[int]
+) -> list[list[int]]:
+    """Restore raw media placeholders before vLLM performs its own expansion."""
+    collapsed_prompts = []
+    for prompt in prompt_ids:
+        collapsed = []
+        for token_id in prompt:
+            token_id = int(token_id)
+            if token_id in media_token_ids and collapsed and collapsed[-1] == token_id:
+                continue
+            collapsed.append(token_id)
+        collapsed_prompts.append(collapsed)
+    return collapsed_prompts
+
+
 # === VLM GRPO loop ===
 
 
-class LFMVLMGRPOTrainer(QATGRPOReferenceMixin, GRPOTrainer):
+class LFMVLMGRPOTrainer(
+    VLMParameterParticipationMixin, QATGRPOReferenceMixin, GRPOTrainer
+):
     """Liquid integration around TRL native LFM2-VL GRPO support.
 
     TRL 1.7+ owns multimodal image discovery, tile-aware buffering,
@@ -67,7 +127,17 @@ class LFMVLMGRPOTrainer(QATGRPOReferenceMixin, GRPOTrainer):
     """
 
     def __init__(self, lr_multipliers: dict[str, float] | None = None, **kwargs: Any):
+        processor = kwargs.get("processing_class")
+        args = kwargs.get("args")
+        media_tokens = _configure_media_generation_kwargs(args, processor)
+
         super().__init__(**kwargs)
+        self._image_pad_token_id = _primary_media_token_id(
+            processor, "image", media_tokens["image"]["ids"]
+        )
+        self._video_pad_token_id = _primary_media_token_id(
+            processor, "video", media_tokens["video"]["ids"]
+        )
         self.lr_multipliers = lr_multipliers or DEFAULT_LR_MULTIPLIERS
         self._optimizer_group_names: list[str] = []
         self._vlm_grpo_loaded_images = []
@@ -133,6 +203,22 @@ class LFMVLMGRPOTrainer(QATGRPOReferenceMixin, GRPOTrainer):
                 image.close()
             self._vlm_grpo_loaded_images.clear()
 
+    def _generate_single_turn(self, prompt_ids, images, multimodal_fields):
+        # Transformers expands each LFM3 media marker into one token per vision
+        # embedding. vLLM accepts the unexpanded marker and performs that same
+        # replacement itself; passing the expanded run makes it expand twice.
+        if (
+            self.use_vllm
+            and getattr(self.model.config, "model_type", None) == "lfm3_vl"
+        ):
+            media_token_ids = {
+                token_id
+                for token_id in (self._image_pad_token_id, self._video_pad_token_id)
+                if token_id is not None
+            }
+            prompt_ids = _collapse_media_token_runs(prompt_ids, media_token_ids)
+        return super()._generate_single_turn(prompt_ids, images, multimodal_fields)
+
 
 def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> None:
     train_dataset, eval_dataset, prepare_trainer = resolve_train_eval_datasets(
@@ -174,7 +260,6 @@ def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -
         excluded_keys=excluded_keys,
         config_cls=GRPOConfig,
     )
-
     tracker = init_tracking_from_config(
         job_name,
         train_config,
@@ -182,6 +267,8 @@ def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -
         resume_from_checkpoint=resume_from,
     )
 
+    # The policy loader below handles remote code. Keep TRL's flag false so
+    # native vLLM registrations use their native Transformers config classes.
     config_kwargs = {
         "report_to": tracker,
         "run_name": job_name,
@@ -191,10 +278,16 @@ def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -
 
     model, processor = load_vlm_model(
         model_name,
+        revision=training_config.get("model_revision"),
         min_image_tokens=min_image_tokens,
         max_image_tokens=max_image_tokens,
         do_image_splitting=do_image_splitting,
     )
+    apply_model_generation_defaults(training_args, model, train_config_filtered)
+    if train_config.get("use_vllm") and train_config.get("vllm_mode") == "colocate":
+        model.name_or_path = resolve_cached_model_snapshot(
+            model_name, training_config.get("model_revision")
+        )
     prepare_model_for_qat(
         model,
         train_config,

@@ -188,6 +188,18 @@ def test_full_weight_qat_reference_matches_policy_parameter_precision():
     assert reference.proj.weight.dtype == torch.float32
 
 
+def test_full_weight_dpo_loads_an_explicit_reference_without_qat():
+    reference = _DenseModel()
+
+    result = prepare_dpo_reference_model(
+        {},
+        policy_uses_peft=False,
+        load_model=lambda: reference,
+    )
+
+    assert result is reference
+
+
 def test_q4_qat_improves_deployment_loss_on_fixed_learning_problem():
     torch.manual_seed(42)
     inputs = torch.randn(16, 32)

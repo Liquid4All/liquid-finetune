@@ -115,3 +115,38 @@ def test_object_store_memory_override_is_validated(monkeypatch, value):
 
     with pytest.raises(ValueError, match="LIQUID_RAY_OBJECT_STORE_MEMORY"):
         ray_runtime.resolve_local_object_store_memory()
+
+
+def test_training_visibility_updates_cuda_and_rocm(monkeypatch):
+    monkeypatch.setattr(ray_runtime, "_is_rocm_torch", lambda: True)
+
+    ray_runtime.set_training_visible_devices("1,2,3")
+
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "1,2,3"
+    assert os.environ["HIP_VISIBLE_DEVICES"] == "1,2,3"
+
+
+def test_training_visibility_does_not_create_hip_mask_on_cuda(monkeypatch):
+    monkeypatch.setattr(ray_runtime, "_is_rocm_torch", lambda: False)
+    monkeypatch.delenv("HIP_VISIBLE_DEVICES", raising=False)
+
+    ray_runtime.set_training_visible_devices("1,2,3")
+
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "1,2,3"
+    assert "HIP_VISIBLE_DEVICES" not in os.environ
+
+
+def test_worker_setup_uses_a_process_scoped_triton_cache(tmp_path, monkeypatch):
+    cache_root = tmp_path / "triton"
+    monkeypatch.setenv("TRITON_CACHE_DIR", str(cache_root))
+    monkeypatch.setattr(ray_runtime, "normalize_uv_project_path", lambda: None)
+    monkeypatch.setattr(ray_runtime, "normalize_visible_devices", lambda: None)
+    monkeypatch.setattr(
+        ray_runtime, "patch_ray_rocm_torch_device_helpers", lambda: None
+    )
+
+    ray_runtime.worker_process_setup_hook()
+
+    expected = cache_root / str(os.getpid())
+    assert os.environ["TRITON_CACHE_DIR"] == str(expected)
+    assert expected.is_dir()

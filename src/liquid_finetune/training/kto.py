@@ -152,6 +152,17 @@ def kto_run(training_config: dict) -> None:
         model_name=model_name,
         train_config=train_config,
     )
+    # KTOTrainer otherwise reconstructs the full-finetuning reference model
+    # from config._name_or_path. That bypasses our trust_remote_code and pinned
+    # revision handling, which breaks remote-code checkpoints such as LFM3.
+    ref_model = None
+    if not (adapter_path or peft_config):
+        ref_model = load_causal_lm_for_training(
+            training_config,
+            model_name=model_name,
+            train_config=train_config,
+            install_memory_efficient_loss=False,
+        )[0]
 
     if adapter_path:
         # KTOTrainer clones the pretrained adapter into a frozen "ref" adapter
@@ -165,6 +176,7 @@ def kto_run(training_config: dict) -> None:
 
     trainer = LFMKTOTrainer(
         model=model,
+        ref_model=ref_model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,

@@ -25,6 +25,7 @@ from conftest import (
     assert_grpo_optimization,
     requires_gpu,
     requires_single_gpu,
+    require_vllm_architecture,
     run_e2e_training,
     run_local_e2e_training,
 )
@@ -32,40 +33,39 @@ from conftest import (
 pytestmark = pytest.mark.vlm
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
+LFM3_VL_REVISION = "23387beda43c60310348e83e25f78f33c3140d3a"
 
 
-def _write_multi_image_grpo_config(tmp_path):
+def _write_multi_image_grpo_config(
+    tmp_path, *, model_name=None, use_peft=False, mode="colocate"
+):
     fixture_dir = tmp_path / "grpo_multi_image_fixture"
     image_dir = fixture_dir / "images"
     image_dir.mkdir(parents=True, exist_ok=True)
     image_paths = []
-    for name, color in (("red", "red"), ("blue", "blue")):
+    for index, (name, color) in enumerate((("red", "red"), ("blue", "blue"))):
         path = image_dir / f"{name}.png"
-        Image.new("RGB", (48, 48), color=color).save(path)
+        Image.new("RGB", (48 + index * 24, 48), color=color).save(path)
         image_paths.append(str(path))
 
     rows = []
     for index in range(8):
-        rows.append(
-            {
-                "prompt": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image", "image": image_paths[index % 2]},
-                            {
-                                "type": "image",
-                                "image": image_paths[(index + 1) % 2],
-                            },
-                            {
-                                "type": "text",
-                                "text": "Describe how these two colored squares differ.",
-                            },
-                        ],
-                    }
-                ]
-            }
+        content = (
+            [{"type": "text", "text": "Reply with a short greeting."}]
+            if index % 4 == 0
+            else [
+                {"type": "image", "image": image_paths[index % 2]},
+                {
+                    "type": "image",
+                    "image": image_paths[(index + 1) % 2],
+                },
+                {
+                    "type": "text",
+                    "text": "Describe how these two colored squares differ.",
+                },
+            ]
         )
+        rows.append({"prompt": [{"role": "user", "content": content}]})
 
     dataset_dir = fixture_dir / "data"
     dataset_dir.mkdir()
@@ -75,8 +75,30 @@ def _write_multi_image_grpo_config(tmp_path):
     config = yaml.safe_load((FIXTURES / "e2e_vlm_grpo.yaml").read_text())
     config["dataset"]["path"] = str(dataset_path)
     config["dataset"]["limit"] = len(rows)
-    reward_path = FIXTURES.parents[2] / "rewards" / "length.py"
-    config["rewards"]["funcs"] = [f"{reward_path}::length_reward"]
+    if model_name is not None:
+        reward_path = FIXTURES / "grpo_reward.py"
+        config["rewards"]["funcs"] = [f"{reward_path}::alternating_reward"]
+        config["project_name"] = f"e2e_lfm3_vlm_grpo_{mode}"
+        config["model_name"] = model_name
+        config["model_revision"] = LFM3_VL_REVISION
+        config["training_config"].update(
+            {
+                "max_steps": 2,
+                "steps_per_generation": 1,
+                "per_device_train_batch_size": 2,
+                "max_completion_length": 4,
+                "max_image_tokens": 64,
+                "use_vllm": mode != "transformers",
+                "vllm_mode": "colocate" if mode == "transformers" else mode,
+            }
+        )
+        config["peft_config"] = (
+            {"extends": "DEFAULT_VLM_LORA", "use_peft": True}
+            if use_peft
+            else {"use_peft": False}
+        )
+        if mode == "server":
+            config["grpo_rollout"] = {"server_gpus": 1, "training_gpus": 3}
     config_dir = fixture_dir / "config"
     config_dir.mkdir()
     config_path = config_dir / "e2e_vlm_grpo_multi_image.yaml"
@@ -105,3 +127,20 @@ class TestVLMGRPO:
     def test_local_single_gpu_training(self, e2e_output_dir, tmp_path):
         config_path = _write_multi_image_grpo_config(tmp_path)
         run_local_e2e_training(config_path, e2e_output_dir)
+
+    @pytest.mark.parametrize("use_peft", [True, False], ids=["lora", "full"])
+    @pytest.mark.parametrize("mode", ["transformers", "colocate", "server"])
+    @requires_gpu
+    def test_lfm3_vlm_grpo_generation_modes_optimize(
+        self, use_peft, mode, e2e_output_dir, tmp_path
+    ):
+        if mode != "transformers":
+            require_vllm_architecture("Lfm3VlForConditionalGeneration")
+        config_path = _write_multi_image_grpo_config(
+            tmp_path,
+            model_name="LiquidAI/LFM3-VL-2B",
+            use_peft=use_peft,
+            mode=mode,
+        )
+        result = run_e2e_training(config_path, e2e_output_dir)
+        assert_grpo_optimization(result, min_steps=2)

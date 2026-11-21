@@ -4,6 +4,7 @@ import yaml
 from conftest import (
     assert_checkpoints_exist,
     assert_eval_callback_logged,
+    assert_hf_export_reloads_and_generates,
     assert_local_model_saved,
     assert_training_result,
     requires_gpu,
@@ -15,6 +16,7 @@ from conftest import (
 pytestmark = pytest.mark.dense
 
 FIXTURES = __import__("pathlib").Path(__file__).parent / "fixtures"
+LFM3_TEXT_REVISION = "1da06bec6a819da10b54c67e5c90972b46d81871"
 
 
 # === Dense SFT with LoRA ===
@@ -70,11 +72,15 @@ class TestDenseDPOLoRA:
 
 
 class TestLFM3:
+    @pytest.mark.parametrize("fixture_name", ["e2e_sft_lora.yaml", "e2e_sft_full.yaml"])
     @requires_gpu
-    def test_training_completes_and_checkpoints(self, e2e_output_dir, tmp_path):
-        config = yaml.safe_load((FIXTURES / "e2e_sft_lora.yaml").read_text())
+    def test_sft_training_completes_and_checkpoints(
+        self, fixture_name, e2e_output_dir, tmp_path
+    ):
+        config = yaml.safe_load((FIXTURES / fixture_name).read_text())
         config["project_name"] = "e2e_lfm3_sft"
         config["model_name"] = "LiquidAI/LFM3-1.7B"
+        config["model_revision"] = LFM3_TEXT_REVISION
         config["dataset"]["limit"] = 40
         config["evals"]["benchmarks"][0]["path"] = str(FIXTURES / "tiny_eval.jsonl")
         config["training_config"].update(
@@ -89,6 +95,42 @@ class TestLFM3:
 
         result = run_e2e_training(str(config_path), e2e_output_dir)
         assert_training_result(result, max_eval_loss=7.0, check_loss_trend=False)
+        assert_eval_callback_logged(result)
+        assert_checkpoints_exist(e2e_output_dir)
+        assert_hf_export_reloads_and_generates(e2e_output_dir, modality="text")
+        if fixture_name == "e2e_sft_lora.yaml":
+            checkpoints = sorted(
+                state.parent for state in e2e_output_dir.rglob("trainer_state.json")
+            )
+            assert checkpoints
+            config["training_config"].update(
+                {
+                    "resume_from_checkpoint": str(checkpoints[-1]),
+                    "num_train_epochs": 2,
+                    "save_strategy": "no",
+                }
+            )
+            config_path.write_text(yaml.safe_dump(config))
+            resumed = run_e2e_training(str(config_path), e2e_output_dir)
+            assert_training_result(resumed, max_eval_loss=7.0, check_loss_trend=False)
+
+    @pytest.mark.parametrize("fixture_name", ["e2e_dpo_lora.yaml", "e2e_dpo_full.yaml"])
+    @requires_gpu
+    def test_dpo_training_completes_and_checkpoints(
+        self, fixture_name, e2e_output_dir, tmp_path
+    ):
+        config = yaml.safe_load((FIXTURES / fixture_name).read_text())
+        config["project_name"] = "e2e_lfm3_dpo"
+        config["model_name"] = "LiquidAI/LFM3-1.7B"
+        config["model_revision"] = LFM3_TEXT_REVISION
+        config["dataset"]["limit"] = 40
+        config["evals"]["benchmarks"][0]["path"] = str(FIXTURES / "tiny_eval.jsonl")
+        config["training_config"].update({"logging_steps": 2, "save_strategy": "epoch"})
+        config_path = tmp_path / "lfm3_dpo.yaml"
+        config_path.write_text(yaml.safe_dump(config))
+
+        result = run_e2e_training(str(config_path), e2e_output_dir)
+        assert_training_result(result, check_loss_trend=False)
         assert_eval_callback_logged(result)
         assert_checkpoints_exist(e2e_output_dir)
 
