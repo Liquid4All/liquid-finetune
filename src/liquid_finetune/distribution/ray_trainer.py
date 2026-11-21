@@ -1,4 +1,6 @@
+import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from liquid_finetune.distribution.ray_runtime import (
@@ -10,6 +12,7 @@ from liquid_finetune.distribution.ray_runtime import (
     resolve_local_ray_num_cpus,
     resolve_local_object_store_memory,
     resolve_num_workers,
+    set_training_visible_devices,
     select_object_spilling_dir,
     select_ray_temp_dir,
     worker_process_setup_hook,
@@ -18,9 +21,11 @@ from liquid_finetune.distribution.ray_runtime import (
 import ray
 import ray.data
 from accelerate.utils import set_seed
+from ray.exceptions import RayTaskError
 from ray.runtime_env import RuntimeEnv
 from ray.train import CheckpointConfig, DataConfig, RunConfig
 from ray.train.torch import TorchConfig, TorchTrainer
+from ray.train.torch.config import _TorchBackend
 from torch import cuda
 
 from liquid_finetune import RUNTIME_DIR
@@ -53,6 +58,31 @@ from liquid_finetune.training import (
     TRAINING_LOOPS,
 )
 from liquid_finetune.training.utils.logging import print_next_steps_panel
+
+
+logger = logging.getLogger(__name__)
+
+
+class _ColocatedVLLMTorchBackend(_TorchBackend):
+    """Tolerate vLLM releasing Ray's externally-owned process group first."""
+
+    def on_shutdown(self, worker_group, backend_config):
+        try:
+            super().on_shutdown(worker_group, backend_config)
+        except RayTaskError as exc:
+            if "Process group cannot be None" not in str(exc):
+                raise
+            logger.warning(
+                "vLLM already released the colocated training process group; "
+                "continuing Ray worker shutdown"
+            )
+
+
+@dataclass
+class _ColocatedVLLMTorchConfig(TorchConfig):
+    @property
+    def backend_cls(self):
+        return _ColocatedVLLMTorchBackend
 
 
 def ray_trainer(job_config: dict) -> None:
@@ -100,15 +130,14 @@ def ray_trainer(job_config: dict) -> None:
                     "Run this job in a fresh process or use an externally managed "
                     "vLLM server."
                 )
-            os.environ["CUDA_VISIBLE_DEVICES"] = (
-                rollout_plan.training_cuda_visible_devices
-            )
+            set_training_visible_devices(rollout_plan.training_cuda_visible_devices)
 
         if rollout_plan.launches_local_server:
             host = resolve_server_host(training_config.get("vllm_server_host"))
             port = int(training_config.get("vllm_server_port", 8000))
             server_handle = launch_vllm_server(
                 model_id=_resolve_model_id(job_config["model_name"]),
+                model_revision=job_config.get("model_revision"),
                 vllm_gpu_ids=rollout_plan.server_gpu_ids,
                 grpo_rollout_cfg=grpo_rollout_cfg,
                 host="0.0.0.0",
@@ -132,6 +161,7 @@ def ray_trainer(job_config: dict) -> None:
                 port = int(judge_cfg.get("port", 8001))
                 judge_handle = launch_vllm_server(
                     model_id=model_id,
+                    model_revision=judge_cfg.get("revision"),
                     vllm_gpu_ids=rollout_plan.judge_gpu_ids,
                     grpo_rollout_cfg=_judge_server_config(
                         grpo_rollout_cfg,
@@ -234,6 +264,7 @@ def ray_trainer(job_config: dict) -> None:
     if use_pretokenize:
         tokenizer = load_tokenizer(
             job_config["model_name"],
+            revision=job_config.get("model_revision"),
             chat_template=training_config.get("chat_template"),
             chat_template_path=training_config.get("chat_template_path"),
         )
@@ -265,6 +296,7 @@ def ray_trainer(job_config: dict) -> None:
     # logical batch. Non-EP lets Ray split one shard per worker normally.
     train_loop_config = {
         "model_name": job_config["model_name"],
+        "model_revision": job_config.get("model_revision"),
         "job_name": job_config.get("job_name", "liquid-ft-run"),
         "train_config": training_config,
         "peft_config": job_config["peft_config"],
@@ -319,7 +351,7 @@ def ray_trainer(job_config: dict) -> None:
             eval_gpu_ids = [str(gpu_id) for gpu_id in eval_gpus_local]
             train_gpu_ids = [str(gpu_id) for gpu_id in train_gpus_local]
 
-        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(train_gpu_ids)
+        set_training_visible_devices(",".join(train_gpu_ids))
         num_workers = len(train_gpu_ids)
 
         eval_port = int((async_eval_cfg.get("reserved") or {}).get("server_port", 8100))
@@ -358,12 +390,18 @@ def ray_trainer(job_config: dict) -> None:
     # ==== 4. Launch workers ====
     # Each Ray worker runs TRAINING_LOOPS[training_type] with NCCL initialized by
     # Ray Train. Model loading, FSDP/EP wrapping, training, and saves happen there.
+    uses_colocated_vllm = (
+        is_grpo
+        and training_config.get("use_vllm", True)
+        and training_config.get("vllm_mode", "colocate") == "colocate"
+    )
+    torch_config_cls = _ColocatedVLLMTorchConfig if uses_colocated_vllm else TorchConfig
     trainer = TorchTrainer(
         train_loop_per_worker=train_loop,
         train_loop_config=train_loop_config,
         scaling_config=scale_config,
         run_config=run_config,
-        torch_config=TorchConfig(backend="nccl", timeout_s=7200),
+        torch_config=torch_config_cls(backend="nccl", timeout_s=7200),
         datasets=datasets,
         dataset_config=ray_dataset_config,
     )

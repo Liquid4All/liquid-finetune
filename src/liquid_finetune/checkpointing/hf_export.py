@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import os
 import pathlib
@@ -242,6 +243,33 @@ def _copy_custom_model_code_from_config(config: Any, export_dir: str) -> None:
             shutil.copy2(src, pathlib.Path(export_dir) / filename)
 
 
+@contextlib.contextmanager
+def original_model_class_for_save(model: torch.nn.Module):
+    """Temporarily undo FSDP2's generated class while saving remote-code models."""
+    fsdp_cls = type(model)
+    if not fsdp_cls.__module__.startswith("torch.distributed.fsdp"):
+        yield
+        return
+
+    original_cls = next(
+        (
+            cls
+            for cls in fsdp_cls.__mro__[1:]
+            if not cls.__module__.startswith("torch.distributed.fsdp")
+        ),
+        None,
+    )
+    if original_cls is None:
+        yield
+        return
+
+    model.__class__ = original_cls
+    try:
+        yield
+    finally:
+        model.__class__ = fsdp_cls
+
+
 def _unwrap_model_for_hf_export(model: torch.nn.Module, accelerator) -> torch.nn.Module:
     if accelerator is None:
         return _unwrap_model_for_metadata(model)
@@ -371,12 +399,13 @@ def _save_hf_pretrained_model(
         )
 
     os.makedirs(export_dir, exist_ok=True)
-    model_to_save.save_pretrained(
-        export_dir,
-        state_dict=state_dict,
-        is_main_process=True,
-        max_shard_size=HF_EXPORT_MAX_SHARD_SIZE,
-    )
+    with original_model_class_for_save(model_to_save):
+        model_to_save.save_pretrained(
+            export_dir,
+            state_dict=state_dict,
+            is_main_process=True,
+            max_shard_size=HF_EXPORT_MAX_SHARD_SIZE,
+        )
     config = getattr(model_to_save, "config", None)
     if config is not None:
         _copy_custom_model_code_from_config(config, export_dir)

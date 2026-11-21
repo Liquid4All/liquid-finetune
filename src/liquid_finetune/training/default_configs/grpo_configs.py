@@ -54,9 +54,6 @@ DEFAULT_GRPO = {
     # --- GRPO algorithmic ---
     "num_generations": 8,
     "max_completion_length": 256,
-    "temperature": 1.0,
-    "top_p": 1.0,
-    "top_k": 0,
     "beta": 0.0,  # KL off; TRL v1 default, ref model not loaded
     "epsilon": 0.2,
     "loss_type": "dapo",  # TRL v1 default

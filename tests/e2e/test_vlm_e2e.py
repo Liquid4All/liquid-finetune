@@ -2,6 +2,7 @@ import pytest
 
 from conftest import (
     assert_checkpoints_exist,
+    assert_hf_export_reloads_and_generates,
     assert_local_model_saved,
     assert_training_result,
     requires_gpu,
@@ -13,6 +14,7 @@ from conftest import (
 pytestmark = pytest.mark.vlm
 
 FIXTURES = __import__("pathlib").Path(__file__).parent / "fixtures"
+LFM3_VL_REVISION = "23387beda43c60310348e83e25f78f33c3140d3a"
 
 
 # === VLM SFT with LoRA ===
@@ -34,17 +36,25 @@ class TestVLMLoRA:
 
 
 class TestLFM3VL:
+    @pytest.mark.parametrize("fixture_name", ["e2e_vlm_lora.yaml", "e2e_vlm_full.yaml"])
     @requires_gpu
-    def test_training_completes_and_checkpoints(self, e2e_output_dir, tmp_path):
+    def test_training_completes_and_checkpoints(
+        self, fixture_name, e2e_output_dir, tmp_path
+    ):
         config_path = _write_vlm_sft_config(
             tmp_path,
-            "e2e_vlm_lora.yaml",
+            fixture_name,
             model_name="LiquidAI/LFM3-VL-2B",
             save_checkpoints=True,
         )
         result = run_e2e_training(config_path, e2e_output_dir)
-        assert_training_result(result, check_loss_trend=False)
+        assert_training_result(result, max_eval_loss=7.0, check_loss_trend=False)
         assert_checkpoints_exist(e2e_output_dir)
+        assert_hf_export_reloads_and_generates(
+            e2e_output_dir,
+            modality="vlm",
+            image_path=str(tmp_path / "images" / "img0.png"),
+        )
 
 
 # === VLM SFT full fine-tune ===
@@ -82,14 +92,18 @@ def _write_vlm_sft_config(
     imgdir.mkdir(parents=True, exist_ok=True)
     colors = [(200, 30, 30), (30, 200, 30), (30, 30, 200), (200, 200, 30)]
     paths = []
+    sizes = [(48, 48), (64, 40), (40, 72), (80, 56)]
     for i, c in enumerate(colors):
         p = imgdir / f"img{i}.png"
-        Image.new("RGB", (48, 48), c).save(p)
+        Image.new("RGB", sizes[i], c).save(p)
         paths.append(str(p))
 
     rows = []
     for i in range(40):
-        if i % 7 == 0:  # multi-image rows
+        if i % 11 == 0:  # text-only rows mixed into the VLM batch
+            content = [{"type": "text", "text": "Reply with a short greeting."}]
+            answer = "Hello."
+        elif i % 7 == 0:  # multi-image rows
             content = [
                 {"type": "image", "image": paths[i % 4]},
                 {"type": "image", "image": paths[(i + 1) % 4]},
@@ -119,6 +133,8 @@ def _write_vlm_sft_config(
     if model_name is not None:
         config["project_name"] = "e2e_lfm3_vlm"
         config["model_name"] = model_name
+        if model_name == "LiquidAI/LFM3-VL-2B":
+            config["model_revision"] = LFM3_VL_REVISION
         config["training_config"].update(
             {
                 "logging_steps": 2,
@@ -138,6 +154,86 @@ def _write_vlm_sft_config(
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(yaml.safe_dump(config))
     return str(cfg_path)
+
+
+def _write_lfm3_vlm_dpo_config(tmp_path, *, use_peft: bool) -> str:
+    import json
+
+    from PIL import Image
+
+    image_dir = tmp_path / "dpo_images"
+    image_dir.mkdir()
+    image_paths = []
+    for index, (size, color) in enumerate(
+        [((48, 48), "red"), ((72, 40), "blue"), ((40, 80), "green")]
+    ):
+        path = image_dir / f"{index}.png"
+        Image.new("RGB", size, color).save(path)
+        image_paths.append(str(path))
+
+    rows = []
+    for index in range(24):
+        rows.append(
+            {
+                "prompt": [{"role": "user", "content": "Describe the colored image."}],
+                "chosen": [
+                    {"role": "assistant", "content": "It is a colored rectangle."}
+                ],
+                "rejected": [{"role": "assistant", "content": "There is no image."}],
+                "images": [
+                    image_paths[index % len(image_paths)],
+                    *(
+                        [image_paths[(index + 1) % len(image_paths)]]
+                        if index % 5 == 0
+                        else []
+                    ),
+                ],
+            }
+        )
+    dataset_path = tmp_path / "vlm_dpo.jsonl"
+    dataset_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+
+    config = {
+        "project_name": "e2e_lfm3_vlm_dpo",
+        "model_name": "LiquidAI/LFM3-VL-2B",
+        "model_revision": LFM3_VL_REVISION,
+        "training_type": "vlm_dpo",
+        "dataset": {
+            "path": str(dataset_path),
+            "type": "vlm_dpo",
+            "limit": len(rows),
+            "test_size": 0.25,
+        },
+        "training_config": {
+            "extends": "DEFAULT_VLM_DPO",
+            "num_train_epochs": 1,
+            "per_device_train_batch_size": 1,
+            "gradient_accumulation_steps": 1,
+            "learning_rate": 1e-6,
+            "max_image_tokens": 256,
+            "max_length": 1024,
+            "logging_steps": 1,
+            "save_strategy": "no",
+            "eval_strategy": "epoch",
+        },
+        "peft_config": (
+            {"extends": "DEFAULT_VLM_LORA", "use_peft": True}
+            if use_peft
+            else {"use_peft": False}
+        ),
+    }
+    config_path = tmp_path / f"lfm3_vlm_dpo_{use_peft}.yaml"
+    config_path.write_text(__import__("yaml").safe_dump(config))
+    return str(config_path)
+
+
+class TestLFM3VLMDPO:
+    @pytest.mark.parametrize("use_peft", [True, False], ids=["lora", "full"])
+    @requires_gpu
+    def test_training_completes(self, use_peft, e2e_output_dir, tmp_path):
+        config_path = _write_lfm3_vlm_dpo_config(tmp_path, use_peft=use_peft)
+        result = run_e2e_training(config_path, e2e_output_dir)
+        assert_training_result(result, max_eval_loss=7.0, check_loss_trend=False)
 
 
 class TestVLMStringContent:

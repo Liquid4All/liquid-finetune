@@ -87,6 +87,7 @@ def local_trainer(job_config: dict):
     if base_type in {"sft", "dpo"}:
         tokenizer = load_tokenizer(
             job_config["model_name"],
+            revision=job_config.get("model_revision"),
             chat_template=train_config.get("chat_template"),
             chat_template_path=train_config.get("chat_template_path"),
         )
@@ -97,6 +98,7 @@ def local_trainer(job_config: dict):
     )
     loop_config = {
         "model_name": job_config["model_name"],
+        "model_revision": job_config.get("model_revision"),
         "job_name": job_config.get("job_name", "liquid-ft-run"),
         "train_config": train_config,
         "peft_config": job_config.get("peft_config"),

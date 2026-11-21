@@ -12,6 +12,7 @@ from transformers import (
     AutoModelForImageTextToText,
 )
 from transformers.utils import is_flash_attn_2_available
+from transformers.utils.hub import cached_file
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,23 @@ def _resolve_model_id(model_name: str) -> str:
     if "/" in model_name or "://" in model_name:
         return model_name
     return f"LiquidAI/{model_name}"
+
+
+def resolve_cached_model_snapshot(model_name: str, revision: str | None) -> str:
+    """Return the immutable local Hub snapshot used by an already-loaded model."""
+    model_id = _resolve_model_id(model_name)
+    if revision is None or pathlib.Path(model_id).is_dir():
+        return model_id
+
+    config_path = cached_file(
+        model_id,
+        "config.json",
+        revision=revision,
+        local_files_only=True,
+    )
+    if config_path is None:
+        raise FileNotFoundError(f"No cached snapshot found for {model_id}@{revision}")
+    return str(pathlib.Path(config_path).parent)
 
 
 def _is_lfm25_chat_template_model(model_name: str) -> bool:
@@ -214,12 +232,15 @@ def _enforce_lfm_tied_word_embeddings(model: AutoModelForCausalLM) -> None:
 def load_tokenizer(
     model_name: str,
     *,
+    revision: str | None = None,
     chat_template: str | None = None,
     chat_template_path: str | None = None,
 ) -> AutoTokenizer:
     """Load only the tokenizer (lightweight, no model weights)."""
     model_id = _resolve_model_id(model_name)
-    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id, revision=revision, trust_remote_code=True
+    )
     return _apply_chat_template_override(
         tokenizer,
         model_name=model_name,
@@ -232,6 +253,7 @@ def load_model(
     model_name: str,
     model_config: dict | None = None,
     *,
+    revision: str | None = None,
     chat_template: str | None = None,
     chat_template_path: str | None = None,
     install_memory_efficient_loss: bool = True,
@@ -248,7 +270,9 @@ def load_model(
     model_id = _resolve_model_id(model_name)
     logger.info(f"Loading model: {model_id}")
 
-    config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+    config = AutoConfig.from_pretrained(
+        model_id, revision=revision, trust_remote_code=True
+    )
     normalized_model_config = normalize_model_config_overrides(config, model_config)
     if normalized_model_config:
         for key, value in normalized_model_config.items():
@@ -263,6 +287,7 @@ def load_model(
         dtype=torch.bfloat16,
         attn_implementation=attn_impl,
         trust_remote_code=True,
+        revision=revision,
     )
     _enforce_lfm_tied_word_embeddings(model)
     model.config.use_cache = False
@@ -278,7 +303,9 @@ def load_model(
     else:
         logger.info("Skipping memory-efficient causal LM loss install")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id, revision=revision, trust_remote_code=True
+    )
     tokenizer = _apply_chat_template_override(
         tokenizer,
         model_name=model_name,
@@ -306,13 +333,16 @@ def load_vlm_model(
     min_image_tokens: int | None = None,
     max_image_tokens: int | None = None,
     do_image_splitting: bool = True,
+    revision: str | None = None,
 ) -> tuple[AutoModelForImageTextToText, AutoProcessor]:
     """Load a VLM model from the Hugging Face Hub or from a local path."""
 
     model_id = _resolve_model_id(model_name)
     logger.info(f"Loading VLM: {model_id}")
 
-    config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+    config = AutoConfig.from_pretrained(
+        model_id, revision=revision, trust_remote_code=True
+    )
     model_type = getattr(config, "model_type", "")
     processor_kwargs = {"trust_remote_code": True}
     if model_type == "lfm3_vl":
@@ -364,8 +394,10 @@ def load_vlm_model(
         config=config,
         dtype=torch.bfloat16,
         trust_remote_code=True,
+        revision=revision,
         attn_implementation="sdpa",
     )
+    processor_kwargs["revision"] = revision
     processor = AutoProcessor.from_pretrained(model_id, **processor_kwargs)
 
     # Disable KV cache for training (required for gradient checkpointing)

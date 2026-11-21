@@ -14,7 +14,7 @@ supported-markers = [
 overrides = [
     { name = "huggingface-hub", specifier = ">=1.31.0,<2.0" },
     { name = "numpy", specifier = "<2.5" },
-    { name = "transformers", specifier = ">=5.21.0,<5.22.0" },
+    { name = "transformers", specifier = "==5.21.0" },
 ]
 
 [[package]]
@@ -1954,7 +1954,7 @@ requires-dist = [
     { name = "torch", specifier = ">=2.10.0,<2.12.0" },
     { name = "torchvision", specifier = ">=0.24.1" },
     { name = "trackio", specifier = ">=0.38.1,<0.39" },
-    { name = "transformers", specifier = ">=5.21.0,<5.22.0" },
+    { name = "transformers", specifier = "==5.21.0" },
     { name = "trl", specifier = "==1.9.0" },
     { name = "turm", marker = "sys_platform == 'linux'", specifier = ">=0.13.0" },
     { name = "typer", specifier = ">=0.20.0" },
@@ -4896,7 +4896,7 @@ wheels = [
 
 [[package]]
 name = "transformers"
-version = "5.21.1"
+version = "5.21.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux')" },
@@ -4909,9 +4909,9 @@ dependencies = [
     { name = "tqdm", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux')" },
     { name = "typer", marker = "(python_full_version < '3.13' and sys_platform == 'darwin') or (python_full_version < '3.13' and sys_platform == 'linux')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4e/56/142f54fb87a4880fdfe37f8fe776a9045177165182bf1383dc0732c59ae3/transformers-5.21.1.tar.gz", hash = "sha256:65e82dfbe8d0d0d6d09d402dca28e60b3f483beadbb7bdd259ea0e33a04e2efa", size = 10321725, upload-time = "2026-10-29T08:34:30.466Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f6/9d/59e6232df8761e2c82d52e0bef5382e830d1cd65f02f648712ccd7675e7b/transformers-5.21.0.tar.gz", hash = "sha256:43c971a3eb9ab68dc9dfff430f8ab8a0fba09af2f68b608fd70c6245d2ddb8e7", size = 10321727, upload-time = "2026-10-26T18:17:26.892Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1b/83/7983b6002977982929657c4e7473fc1dc8b329259ff864f0c97d1d218f4e/transformers-5.21.1-py3-none-any.whl", hash = "sha256:53b5fd825d009cb7700285acbb4e36e745c7f7df859202ba1a4f21a10eda8e3a", size = 12978536, upload-time = "2026-10-29T08:34:26.151Z" },
+    { url = "https://files.pythonhosted.org/packages/73/fa/fb638d54bffff44700c8d487608c1f2872823e606fbd043b3c29c93236cf/transformers-5.21.0-py3-none-any.whl", hash = "sha256:8803a8712932aa3441c1e8bb340e66d5e3eca079fe65d9b717ede2f3ead01c79", size = 12978463, upload-time = "2026-10-26T18:17:23.647Z" },
 ]
 
 [[package]]

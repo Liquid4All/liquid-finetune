@@ -3,6 +3,7 @@ from __future__ import annotations
 import atexit
 import logging
 import os
+import signal
 import shutil
 import socket
 import subprocess
@@ -44,7 +45,7 @@ class VLLMServerHandle:
         return f"http://{self.host}:{self.port}"
 
     def stop(self) -> None:
-        """Terminate the subprocess if it is still running."""
+        """Terminate the server process group."""
         _terminate_server(self.process)
 
 
@@ -347,6 +348,7 @@ def launch_vllm_server(
     model_id: str,
     vllm_gpu_ids: list[int],
     grpo_rollout_cfg: dict,
+    model_revision: str | None = None,
     host: str = "0.0.0.0",
     port: int = 8000,
     startup_timeout: float = 300.0,
@@ -362,7 +364,8 @@ def launch_vllm_server(
         grpo_rollout_cfg: The ``grpo_rollout:`` YAML block. Recognized keys:
             ``tensor_parallel_size`` (default = len(vllm_gpu_ids)), ``dtype``
             (default "bfloat16"), ``gpu_memory_utilization`` (default 0.9),
-            ``max_model_len`` (default None, vLLM infers).
+            ``max_model_len`` (default None, vLLM infers), and
+            ``trust_remote_code``.
         host: Bind address for the vLLM server. "0.0.0.0" makes it reachable
             from other training processes on the same host.
         port: TCP port.
@@ -399,6 +402,7 @@ def launch_vllm_server(
     dtype = str(grpo_rollout_cfg.get("dtype", "bfloat16"))
     gpu_memory_utilization = float(grpo_rollout_cfg.get("gpu_memory_utilization", 0.9))
     max_model_len = grpo_rollout_cfg.get("max_model_len")
+    trust_remote_code = bool(grpo_rollout_cfg.get("trust_remote_code", False))
 
     cmd: list[Any] = [
         "trl",
@@ -416,6 +420,10 @@ def launch_vllm_server(
         "--gpu_memory_utilization",
         str(gpu_memory_utilization),
     ]
+    if model_revision is not None:
+        cmd += ["--revision", model_revision]
+    if trust_remote_code:
+        cmd += ["--trust_remote_code", "true"]
     if max_model_len is not None:
         cmd += ["--max_model_len", str(max_model_len)]
 
@@ -423,9 +431,12 @@ def launch_vllm_server(
     # training process gets the complementary set from the driver
     # (see trainer.py::ray_trainer).
     env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = vllm_cuda_visible_devices or ",".join(
+    server_visible_devices = vllm_cuda_visible_devices or ",".join(
         str(g) for g in vllm_gpu_ids
     )
+    env["CUDA_VISIBLE_DEVICES"] = server_visible_devices
+    if "HIP_VISIBLE_DEVICES" in env:
+        env["HIP_VISIBLE_DEVICES"] = server_visible_devices
 
     logger.info(
         "Launching vLLM server on GPU(s) %s with CUDA_VISIBLE_DEVICES=%s%s: %s",
@@ -448,6 +459,7 @@ def launch_vllm_server(
         env=env,
         stdout=stdout,
         stderr=subprocess.STDOUT,
+        start_new_session=True,
     )
     if log_file is not None:
         log_file.close()
@@ -526,16 +538,33 @@ def _with_server_log_tail(msg: str, log_path: str | None, max_lines: int = 80) -
 
 
 def _terminate_server(process: subprocess.Popen) -> None:
-    """Best-effort shutdown of the vLLM server subprocess."""
-    if process.poll() is not None:
-        return  # already exited
+    """Best-effort shutdown of the vLLM server and all of its children."""
+    if getattr(process, "_liquid_process_group_stopped", False):
+        return
+
     try:
-        process.terminate()
+        # vLLM launches an EngineCore grandchild that can outlive the TRL
+        # parent and retain its GPU allocation. The process starts a new
+        # session above, so its PID is also the process-group id.
+        os.killpg(process.pid, signal.SIGTERM)
         try:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            logger.warning("vLLM server did not exit on SIGTERM, sending SIGKILL")
-            process.kill()
+            logger.warning(
+                "vLLM server process group did not exit on SIGTERM, sending SIGKILL"
+            )
+
+        # Even when the parent exits promptly, explicitly terminate any
+        # surviving EngineCore descendants in the same process group.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+        if process.poll() is None:
             process.wait(timeout=5)
+        process._liquid_process_group_stopped = True
+    except ProcessLookupError:
+        process._liquid_process_group_stopped = True
     except Exception as e:  # pragma: no cover - best effort cleanup
         logger.warning("Error terminating vLLM server: %s", e)

@@ -46,6 +46,9 @@ from liquid_finetune.training.utils.vlm_optimizer import (
     freeze_vlm_modules,
     log_per_group_lrs,
 )
+from liquid_finetune.training.utils.vlm_parameter_participation import (
+    VLMParameterParticipationMixin,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +56,7 @@ logger = logging.getLogger(__name__)
 # === VLM Trainer with per-component learning rates ===
 
 
-class LFMVLMTrainer(RayDataLoaderMixin, Trainer):
+class LFMVLMTrainer(VLMParameterParticipationMixin, RayDataLoaderMixin, Trainer):
     """VLM Trainer with per-component LR multipliers and Ray data integration.
 
     Vision encoder trains at a lower LR to preserve pretrained features,
@@ -187,6 +190,7 @@ def vlm_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
     # Load model + processor
     model, processor = load_vlm_model(
         model_name,
+        revision=training_config.get("model_revision"),
         min_image_tokens=min_image_tokens,
         max_image_tokens=max_image_tokens,
         do_image_splitting=do_image_splitting,

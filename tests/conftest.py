@@ -230,6 +230,74 @@ def assert_local_model_saved(output_dir: pathlib.Path):
     )
 
 
+def assert_hf_export_reloads_and_generates(
+    output_dir: pathlib.Path, *, modality: str, image_path: str | None = None
+):
+    """Reload a produced HF artifact and execute one real generation."""
+    import gc
+
+    from transformers import (
+        AutoModelForCausalLM,
+        AutoModelForImageTextToText,
+        AutoProcessor,
+        AutoTokenizer,
+    )
+
+    candidates = sorted(
+        config.parent
+        for config in output_dir.rglob("config.json")
+        if (config.parent / "model.safetensors").exists()
+        or (config.parent / "model.safetensors.index.json").exists()
+    )
+    assert candidates, f"No reloadable HF export found under {output_dir}"
+    model_dir = candidates[-1]
+
+    if modality == "text":
+        processor = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_dir, trust_remote_code=True, dtype=torch.bfloat16
+        ).to("cuda")
+        prompt = processor.apply_chat_template(
+            [{"role": "user", "content": "Reply with one word."}],
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        ).to("cuda")
+        output = model.generate(**prompt, max_new_tokens=2)
+    else:
+        from PIL import Image
+
+        assert image_path is not None
+        processor = AutoProcessor.from_pretrained(model_dir, trust_remote_code=True)
+        model = AutoModelForImageTextToText.from_pretrained(
+            model_dir, trust_remote_code=True, dtype=torch.bfloat16
+        ).to("cuda")
+        with Image.open(image_path).convert("RGB") as image:
+            conversation = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": image},
+                        {"type": "text", "text": "Name the dominant color."},
+                    ],
+                }
+            ]
+            inputs = processor.apply_chat_template(
+                conversation,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_dict=True,
+                return_tensors="pt",
+            ).to("cuda")
+            output = model.generate(**inputs, max_new_tokens=2)
+
+    assert output.shape[-1] >= 1
+    del model, processor, output
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
 def run_e2e_training(config_path: str, output_dir: pathlib.Path):
     """Run a normal E2E case through Ray and return its Result."""
     previous_output_dir = os.environ.get("OUTPUT_DIR")
@@ -249,6 +317,21 @@ def run_e2e_training(config_path: str, output_dir: pathlib.Path):
             os.environ.pop("LIQUID_LAUNCHER", None)
         else:
             os.environ["LIQUID_LAUNCHER"] = previous_launcher
+
+
+def require_vllm_architecture(architecture: str) -> None:
+    """Skip native-vLLM E2E cases when the installed build lacks the model."""
+    try:
+        from vllm.model_executor.models import ModelRegistry
+
+        supported = ModelRegistry.get_supported_archs()
+    except (ImportError, AttributeError):
+        supported = ()
+    if architecture not in supported:
+        pytest.skip(
+            f"Installed vLLM does not support {architecture}; LFM3 requires "
+            "Liquid4All/vllm PRs #123 and #128"
+        )
 
 
 def assert_training_result(
