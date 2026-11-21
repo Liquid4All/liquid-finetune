@@ -19,6 +19,7 @@ Environment overrides:
   RAY_GPUS_PER_TASK        Ray job GPUs (default: 4)
   LOCAL_GPUS_PER_TASK      Local job GPUs (default: 1)
   CPUS_PER_GPU             CPUs per GPU (default: 14)
+  GPU_TYPE                 Optional typed Slurm GPU resource name
   TIME_LIMIT               SLURM time limit (default: 06:00:00)
   OUTPUT_DIR               Root test result directory (default: <repo>/.test-results/e2e)
   TMP_ROOT                 Node temp root (default: /tmp)
@@ -73,6 +74,7 @@ JOB_NAME="${JOB_NAME:-lft_e2e_tests}"
 PARTITION="${PARTITION:-}"
 NODES="${NODES:-1}"
 CPUS_PER_GPU="${CPUS_PER_GPU:-14}"
+GPU_TYPE="${GPU_TYPE:-}"
 TIME_LIMIT="${TIME_LIMIT:-06:00:00}"
 TMP_ROOT="${TMP_ROOT:-/tmp}"
 OUTPUT_ROOT="${OUTPUT_DIR:-${ROOT_DIR}/.test-results/e2e}"
@@ -120,13 +122,18 @@ write_script() {
 #SBATCH --job-name=${job_name}
 #SBATCH --nodes=${NODES}
 #SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-task=${gpus}
 #SBATCH --cpus-per-gpu=${CPUS_PER_GPU}
 #SBATCH --time=${TIME_LIMIT}
 #SBATCH --signal=B:TERM@120
 #SBATCH --output=logs/OUT_%x.%j
 #SBATCH --error=logs/ERR_%x.%j
 EOF
+
+        if [[ -n "${GPU_TYPE}" ]]; then
+            echo "#SBATCH --gres=gpu:${GPU_TYPE}:${gpus}"
+        else
+            echo "#SBATCH --gpus-per-task=${gpus}"
+        fi
 
         if [[ -n "${PARTITION}" ]]; then
             echo "#SBATCH --partition=${PARTITION}"
@@ -186,7 +193,7 @@ export PYTHONUNBUFFERED=1
 export RAY_DATA_DISABLE_PROGRESS_BARS=1
 
 cleanup_e2e_temp() {
-  local status=$?
+  local status=\$?
   trap - EXIT TERM INT HUP
   if [[ -n "\${SLURM_JOB_ID:-}" ]]; then
     local expected_root="\${E2E_TMP_ROOT}/lft-e2e-\${SLURM_JOB_ID}-${mode}"

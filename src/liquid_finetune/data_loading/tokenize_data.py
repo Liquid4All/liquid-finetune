@@ -13,6 +13,7 @@ from trl.data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from trl.data_utils import pack_dataset
 
 from liquid_finetune.data_loading.image_loader import load_image
+from liquid_finetune.data_loading.media_tokens import resolve_media_tokens
 from liquid_finetune.data_loading.validate_tool_format import (
     normalize_messages_for_chat_template,
     normalize_row_for_chat_template,
@@ -54,20 +55,8 @@ def create_vlm_collate_fn(
     )
     end_token_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
 
-    multimodal_token_ids = {
-        token_id
-        for token_id in (
-            getattr(processor, "image_token_id", None),
-            getattr(processor, "video_token_id", None),
-        )
-        if isinstance(token_id, int) and token_id >= 0
-    }
-    unknown_token_id = getattr(tokenizer, "unk_token_id", None)
-    vocabulary = tokenizer.get_vocab() if hasattr(tokenizer, "get_vocab") else {}
-    for token in ("<|image|>", "<|video|>", "<|image_pad|>", "<|video_pad|>"):
-        token_id = vocabulary.get(token)
-        if isinstance(token_id, int) and token_id >= 0 and token_id != unknown_token_id:
-            multimodal_token_ids.add(token_id)
+    media_tokens = resolve_media_tokens(processor)
+    multimodal_token_ids = media_tokens["image"]["ids"] | media_tokens["video"]["ids"]
 
     def _build_labels(input_ids):
         """Mask everything except assistant content + <|im_end|> with -100."""

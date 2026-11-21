@@ -35,11 +35,17 @@ expansion without truncating image-placeholder spans. VLM SFT uses the
 checkpoint chat template's native assistant mask and never trains on image,
 video, or padding tokens.
 
+Set the optional top-level `model_revision` to a Hub commit when a run must be
+reproducible; the same revision is used for model, processor/tokenizer,
+reference-model, export, and vLLM-server loading.
+
 Public vLLM releases do not yet include LFM3. LFM3 GRPO with vLLM therefore
 requires a build containing Liquid4All/vllm PRs
 [#123](https://github.com/Liquid4All/vllm/pull/123) and
 [#128](https://github.com/Liquid4All/vllm/pull/128). Set `use_vllm: false` for
-Transformers-local rollouts when that build is unavailable.
+Transformers-local rollouts when that build is unavailable. Build that branch
+against its matching PyTorch and `transformers_private/pp/lfm3` revisions;
+overlaying its Python sources onto a public vLLM wheel is not ABI-compatible.
 
 For feature requests or custom infrastructure support, reach out to
 [support@liquid.ai](mailto:support@liquid.ai) with your setup.
