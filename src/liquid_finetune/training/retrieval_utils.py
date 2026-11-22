@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 from datasets import Dataset
 from sentence_transformers import (
     MultiVectorEncoderTrainingArguments,
@@ -28,6 +30,46 @@ RETRIEVAL_RUNTIME_EXCLUDED_KEYS = (
         "gather_across_devices",
     }
 )
+
+
+def patch_lfm2_bidirectional_shortconv_compat(model) -> int:
+    """Adapt older LFM2 embedding remote code to the Transformers 5 API.
+
+    Transformers 5.21 passes the optional ``seq_idx`` keyword through every
+    LFM2 short-convolution block. Older pinned bidirectional embedding modeling
+    code replaces ``slow_forward`` with a noncausal implementation that predates
+    that keyword. Patch only those incompatible LFM2ShortConv instances and
+    otherwise leave the model untouched.
+    """
+    patched = 0
+    for module in model.modules():
+        if module.__class__.__name__ != "Lfm2ShortConv" or getattr(
+            module, "_liquid_seq_idx_compat", False
+        ):
+            continue
+
+        slow_forward = getattr(module, "slow_forward", None)
+        if not callable(slow_forward):
+            continue
+        parameters = inspect.signature(slow_forward).parameters.values()
+        if any(
+            parameter.name == "seq_idx"
+            or parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        ):
+            continue
+
+        def slow_forward_compat(
+            *args, _slow_forward=slow_forward, seq_idx=None, **kwargs
+        ):
+            del seq_idx
+            return _slow_forward(*args, **kwargs)
+
+        module.slow_forward = slow_forward_compat
+        module._liquid_seq_idx_compat = True
+        patched += 1
+
+    return patched
 
 
 def build_ir_evaluation_data(dataset: Dataset):

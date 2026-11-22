@@ -318,6 +318,24 @@ def test_vlm_collator_masks_non_assistant_media_and_padding_tokens():
     assert batch["labels"].tolist() == [[-100, -100, -100, -100, 3, 4, -100]]
 
 
+def test_vlm_collator_falls_back_when_native_assistant_mask_is_empty():
+    class _EmptyNativeMaskProcessor(_FakeVLMProcessor):
+        def apply_chat_template(self, conversations, **kwargs):
+            batch = super().apply_chat_template(conversations, **kwargs)
+            batch["assistant_masks"] = torch.zeros_like(batch["input_ids"])
+            return batch
+
+    sample = {
+        "messages": [
+            {"role": "user", "content": "Describe the image."},
+            {"role": "assistant", "content": "Red."},
+        ]
+    }
+    batch = create_vlm_collate_fn(_EmptyNativeMaskProcessor())([sample])
+
+    assert batch["labels"].tolist() == [[-100, -100, -100, -100, 3, 4, -100]]
+
+
 def test_vlm_collator_rejects_unsafe_multimodal_truncation():
     collator = create_vlm_collate_fn(_FakeVLMProcessor(), max_length=6)
     try:
