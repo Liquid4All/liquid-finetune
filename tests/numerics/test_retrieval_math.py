@@ -6,6 +6,7 @@ from liquid_finetune.checkpointing.callback import LiquidCheckpointCallback
 from liquid_finetune.training.retrieval_utils import (
     align_retrieval_train_shard,
     build_ir_evaluation_data,
+    patch_lfm2_bidirectional_shortconv_compat,
 )
 
 
@@ -31,6 +32,29 @@ def test_retrieval_worker_aligns_distributed_shards(monkeypatch):
         gather_across_devices=True,
     )
     assert len(aligned) == 4
+
+
+def test_legacy_lfm2_shortconv_ignores_transformers_seq_idx():
+    class Lfm2ShortConv:
+        def modules(self):
+            yield self
+
+        def slow_forward(self, hidden_states, attention_mask=None):
+            return hidden_states, attention_mask
+
+        def forward(self, hidden_states, attention_mask=None, seq_idx=None):
+            return self.slow_forward(
+                hidden_states, attention_mask=attention_mask, seq_idx=seq_idx
+            )
+
+    model = Lfm2ShortConv()
+
+    assert patch_lfm2_bidirectional_shortconv_compat(model) == 1
+    assert model.forward("states", attention_mask="mask", seq_idx="segments") == (
+        "states",
+        "mask",
+    )
+    assert patch_lfm2_bidirectional_shortconv_compat(model) == 0
 
 
 def test_ir_evaluation_data_builds_deduplicated_corpus_and_qrels():
