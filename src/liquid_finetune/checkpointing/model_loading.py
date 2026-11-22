@@ -16,7 +16,8 @@ from transformers.utils import is_flash_attn_2_available
 logger = logging.getLogger(__name__)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-LFM_TIED_WORD_EMBEDDING_MODEL_TYPES = {"lfm2", "lfm2_moe"}
+LFM_TIED_WORD_EMBEDDING_MODEL_TYPES = {"lfm2", "lfm2_moe", "lfm3", "lfm3_vl"}
+LFM2_ROPE_OVERRIDE_MODEL_TYPES = {"lfm2", "lfm2_moe"}
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _LFM2_5_DEFAULT_CHAT_TEMPLATE_PATH = (
     _REPO_ROOT / "job_configs" / "chat_templates" / "lfm2_5_chat_template.jinja"
@@ -146,12 +147,14 @@ def normalize_model_config_overrides(
     # LFM2 / LFM2-MoE consumers do not all read the same RoPE field. Keep the
     # native rope_parameters field populated even when the user only overrides
     # top-level rope_theta.
-    if getattr(config, "model_type", "") in LFM_TIED_WORD_EMBEDDING_MODEL_TYPES:
+    model_type = getattr(config, "model_type", "")
+    if model_type in LFM_TIED_WORD_EMBEDDING_MODEL_TYPES:
         if normalized.get("tie_word_embeddings") is False:
-            raise ValueError("LFM2/LFM2-MoE require tied word embeddings")
+            raise ValueError("LFM models require tied word embeddings")
         if normalized.get("tie_embedding") is False:
-            raise ValueError("LFM2/LFM2-MoE require tied word embeddings")
+            raise ValueError("LFM models require tied word embeddings")
 
+    if model_type in LFM2_ROPE_OVERRIDE_MODEL_TYPES:
         rope_parameters = None
         if "rope_parameters" in normalized:
             rope_parameters = dict(normalized["rope_parameters"])
@@ -308,21 +311,59 @@ def load_vlm_model(
 ) -> tuple[AutoModelForImageTextToText, AutoProcessor]:
     """Load a VLM model from the Hugging Face Hub or from a local path."""
 
-    processor_kwargs = {
-        "trust_remote_code": True,
-        "do_image_splitting": do_image_splitting,
-    }
-    if min_image_tokens is not None:
-        processor_kwargs["min_image_tokens"] = min_image_tokens
-    if max_image_tokens is not None:
-        processor_kwargs["max_image_tokens"] = max_image_tokens
-
     model_id = _resolve_model_id(model_name)
     logger.info(f"Loading VLM: {model_id}")
 
-    # SigLIP2 vision encoder doesn't support FA2, use SDPA for the full VLM
+    config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+    model_type = getattr(config, "model_type", "")
+    processor_kwargs = {"trust_remote_code": True}
+    if model_type == "lfm3_vl":
+        if not do_image_splitting:
+            logger.warning(
+                "LFM3-VL uses dynamic-resolution images; do_image_splitting=False "
+                "has no effect"
+            )
+        if min_image_tokens is not None or max_image_tokens is not None:
+            if min_image_tokens is not None and min_image_tokens <= 0:
+                raise ValueError("min_image_tokens must be positive")
+            if max_image_tokens is not None and max_image_tokens <= 0:
+                raise ValueError("max_image_tokens must be positive")
+            vision_config = config.vision_config
+            patch_size = int(vision_config.patch_size)
+            merge_size = int(vision_config.spatial_merge_size)
+            pixels_per_token = (patch_size * merge_size) ** 2
+            min_pixels = (
+                65_536
+                if min_image_tokens is None
+                else int(min_image_tokens) * pixels_per_token
+            )
+            max_pixels = (
+                16_777_216
+                if max_image_tokens is None
+                else int(max_image_tokens) * pixels_per_token
+            )
+            if min_pixels > max_pixels:
+                raise ValueError("min_image_tokens cannot exceed max_image_tokens")
+            processor_kwargs["size"] = {
+                "shortest_edge": min_pixels,
+                "longest_edge": max_pixels,
+            }
+            logger.info(
+                "Limiting LFM3-VL images to %d-%d pixels",
+                min_pixels,
+                max_pixels,
+            )
+    else:
+        processor_kwargs["do_image_splitting"] = do_image_splitting
+        if min_image_tokens is not None:
+            processor_kwargs["min_image_tokens"] = min_image_tokens
+        if max_image_tokens is not None:
+            processor_kwargs["max_image_tokens"] = max_image_tokens
+
+    # SDPA is the common compatible implementation for the supported VLM towers.
     model = AutoModelForImageTextToText.from_pretrained(
         model_id,
+        config=config,
         dtype=torch.bfloat16,
         trust_remote_code=True,
         attn_implementation="sdpa",

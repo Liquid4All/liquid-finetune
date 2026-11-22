@@ -6,6 +6,8 @@ MHA_MODULES = [
     "self_attn.k_proj",
     "self_attn.v_proj",
     "self_attn.out_proj",
+    "self_attn.o_proj",
+    "self_attn.gate_proj",
 ]
 CONV_MODULES = ["conv.in_proj", "conv.out_proj"]
 
@@ -29,13 +31,9 @@ HIGH_R_LORA = LoraConfig(
 )
 
 
-LFM_MODULES = [
-    "self_attn.q_proj",
-    "self_attn.k_proj",
-    "self_attn.v_proj",
-    "self_attn.out_proj",
-    "conv.in_proj",
-]
+# The union is intentional: LFM2 uses ``out_proj`` while LFM3 uses ``o_proj``
+# in the language model. PEFT ignores names that are absent from a checkpoint.
+LFM_MODULES = GLU_MODULES + MHA_MODULES + CONV_MODULES
 VISION_TOWER_MODULES = ["fc1", "fc2"]
 MULTI_MODAL_PROJECTOR_MODULES = ["linear_1", "linear_2"]
 

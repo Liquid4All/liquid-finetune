@@ -1,7 +1,7 @@
 [project]
 name = "liquid-finetune"
 version = "0.1.0"
-description = "A minimal fine-tuning repo for LFM2, fully built on Open Source."
+description = "A minimal fine-tuning repo for Liquid Foundation Models, fully built on Open Source."
 readme = "README.md"
 authors = [
     { name = "Liquid AI", email = "support@liquid.ai" }
@@ -12,7 +12,7 @@ dependencies = [
     "peft>=0.15.2",
     "deepspeed>=0.17.1; sys_platform == 'linux'",
     "torch>=2.10.0,<2.12.0",
-    "transformers>=5.12.1,<5.21.0",
+    "transformers>=5.21.0,<5.22.0",
     "numpy>=2.4.1",
     "trl==1.9.0",
     "rich>=14.1.0",
@@ -24,7 +24,8 @@ dependencies = [
     "turm>=0.13.0; sys_platform == 'linux'",
     "torchvision>=0.24.1",
     "modal>=0.73",
-    "trackio>=0.3",
+    # Older Trackio releases import Hub APIs removed in huggingface-hub 1.x.
+    "trackio>=0.38.1,<0.39",
     "typer>=0.20.0",
     "kubernetes>=34.0.0",
     "pydantic>=2.0",
@@ -61,15 +62,11 @@ environments = [
 ]
 
 # vLLM wheels can declare dependency ranges that lag the LFM Transformers /
-# Hugging Face Hub stack. The override is intentional and covered by the GRPO
-# smoke fixtures, which leave use_vllm enabled to match shipped defaults.
+# Hugging Face Hub stack. Keep these overrides aligned with the training
+# runtime and the LFM3 remote model code.
 override-dependencies = [
-    # Keep vLLM on the same Transformers range as training. LFM3 remote code
-    # needs Transformers >= 5.12.1 (its config declares 5.12.1).
-    "transformers>=5.12.1,<5.21.0",
-    # Transformers 5.20 needs huggingface_hub >= 1.31; datasets and
-    # sentence-transformers still require < 2.0. (An override replaces the
-    # transitive pins, so the lower bound has to be stated here.)
+    # LFM3 remote code requires the image-processing APIs shipped in 5.21.
+    "transformers>=5.21.0,<5.22.0",
     "huggingface_hub>=1.31.0,<2.0",
     "numpy<2.5",
 ]

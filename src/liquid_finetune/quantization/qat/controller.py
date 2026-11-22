@@ -247,15 +247,9 @@ def prepare_model_for_qat(
                 target_parameters[tensor_name] = getattr(module, parameter_name)
             continue
         if not isinstance(module, nn.Linear):
-            # Transformers >= 5.12 implements MoE routers as dedicated modules
-            # (e.g. ``Lfm2MoeTopKRouter``) that hold a plain 2-D ``weight``
-            # instead of an ``nn.Linear``. They stay in float either way; report
-            # them like the linear routers so the exclusion stays visible.
-            weight = getattr(module, "weight", None)
-            if (
-                name.rsplit(".", 1)[-1] in {"gate", "router"}
-                and isinstance(weight, nn.Parameter)
-                and weight.ndim == 2
+            leaf = name.rsplit(".", 1)[-1]
+            if leaf in _EXCLUDED_LEAVES and isinstance(
+                getattr(module, "weight", None), nn.Parameter
             ):
                 report.excluded.append(name)
             continue

@@ -19,6 +19,7 @@ VLM_SFT_EXCLUDED_KEYS = (
     | DISTRIBUTED_RUNTIME_EXCLUDED_KEYS
     | MANUAL_SHARDED_RUNTIME_EXCLUDED_KEYS
     | VLM_RUNTIME_EXCLUDED_KEYS
+    | {"assistant_only_loss", "max_length"}
 )
 
 # Per-component LR multipliers (applied to base learning_rate).
@@ -32,8 +33,10 @@ DEFAULT_LR_MULTIPLIERS = {
 
 DEFAULT_VLM_SFT = {
     "training_type": "vlm_sft",
+    "assistant_only_loss": True,
     "min_image_tokens": None,  # None = processor default; set int to override
-    "max_image_tokens": None,  # None = processor default (256); set int to override
+    "max_image_tokens": None,  # None = processor default; set int to override
+    "max_length": None,
     "do_image_splitting": True,  # for VLMs, split large images into multiple tiles
     "group_by_image_tiles": False,
     "output_dir": SFT_OUTPUT_PATH,

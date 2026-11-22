@@ -115,6 +115,8 @@ def vlm_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
     min_image_tokens = train_config.get("min_image_tokens")
     max_image_tokens = train_config.get("max_image_tokens")
     do_image_splitting = train_config.get("do_image_splitting", True)
+    assistant_only_loss = bool(train_config.get("assistant_only_loss", True))
+    max_length = train_config.get("max_length")
     run_name_template = train_config.get("liquid_run_name_template")
     lr_multipliers = dict(DEFAULT_LR_MULTIPLIERS)
     if "lr_multipliers" in train_config:
@@ -207,7 +209,11 @@ def vlm_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
         freeze_vlm_modules(model, ["model.vision_tower"])
     finalize_qat_after_peft(model)
 
-    collate_fn = create_vlm_collate_fn(processor)
+    collate_fn = create_vlm_collate_fn(
+        processor,
+        assistant_only_loss=assistant_only_loss,
+        max_length=max_length,
+    )
 
     # Initialize trainer with per-component LR multipliers
     # processing_class ensures processor + tokenizer are saved in checkpoints

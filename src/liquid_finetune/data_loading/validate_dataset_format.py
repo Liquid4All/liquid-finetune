@@ -328,7 +328,7 @@ def get_row_filter(
                 continue
             content = msg.get("content", "")
             if isinstance(content, str) and ("<" in content or "[" in content):
-                if has_foreign_tool_markers(content):
+                if has_foreign_tool_markers(content, model_family):
                     return False
 
         return True
@@ -354,7 +354,7 @@ def get_row_filter(
                         continue
                     content = msg.get("content", "")
                     if isinstance(content, str) and ("<" in content or "[" in content):
-                        if has_foreign_tool_markers(content):
+                        if has_foreign_tool_markers(content, model_family):
                             return False
 
         return True
