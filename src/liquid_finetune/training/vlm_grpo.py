@@ -108,6 +108,25 @@ def _collapse_media_token_runs(
     return collapsed_prompts
 
 
+def _patch_lfm2_vllm_weight_sync(generation, model_type: str | None) -> None:
+    """Restore the checkpoint-style vision prefix expected by vLLM 0.22."""
+    if model_type != "lfm2_vl" or getattr(
+        generation, "_liquid_lfm2_sync_compat", False
+    ):
+        return
+
+    original_push = generation._push_param_to_vllm
+
+    def push_param(name, param):
+        prefix = "model.vision_tower."
+        if name.startswith(prefix) and not name.startswith(f"{prefix}vision_model."):
+            name = name.replace(prefix, f"{prefix}vision_model.", 1)
+        return original_push(name, param)
+
+    generation._push_param_to_vllm = push_param
+    generation._liquid_lfm2_sync_compat = True
+
+
 # === VLM GRPO loop ===
 
 
@@ -127,6 +146,11 @@ class LFMVLMGRPOTrainer(QATGRPOReferenceMixin, GRPOTrainer):
         media_tokens = _configure_media_generation_kwargs(args, processor)
 
         super().__init__(**kwargs)
+        if self.use_vllm:
+            _patch_lfm2_vllm_weight_sync(
+                self.vllm_generation,
+                getattr(self.model.config, "model_type", None),
+            )
         self._image_pad_token_id = _primary_media_token_id(
             processor, "image", media_tokens["image"]["ids"]
         )
