@@ -51,9 +51,6 @@ from liquid_finetune.training.utils.vlm_optimizer import (
     build_vlm_param_groups,
     log_per_group_lrs,
 )
-from liquid_finetune.training.utils.vlm_parameter_participation import (
-    VLMParameterParticipationMixin,
-)
 from liquid_finetune.training.utils.worker_setup import (
     init_tracking_from_config,
     resolve_train_eval_datasets,
@@ -114,9 +111,7 @@ def _collapse_media_token_runs(
 # === VLM GRPO loop ===
 
 
-class LFMVLMGRPOTrainer(
-    VLMParameterParticipationMixin, QATGRPOReferenceMixin, GRPOTrainer
-):
+class LFMVLMGRPOTrainer(QATGRPOReferenceMixin, GRPOTrainer):
     """Liquid integration around TRL native LFM2-VL GRPO support.
 
     TRL 1.7+ owns multimodal image discovery, tile-aware buffering,
@@ -267,8 +262,8 @@ def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -
         resume_from_checkpoint=resume_from,
     )
 
-    # The policy loader below handles remote code. Keep TRL's flag false so
-    # native vLLM registrations use their native Transformers config classes.
+    # The policy loader below handles Hub code. Keep TRL's flag false so native
+    # vLLM integrations use their native Transformers config classes.
     config_kwargs = {
         "report_to": tracker,
         "run_name": job_name,

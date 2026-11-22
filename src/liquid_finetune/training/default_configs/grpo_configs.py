@@ -92,6 +92,13 @@ DEFAULT_VLM_GRPO = {
     "num_generations": 4,
     "vllm_gpu_memory_utilization": 0.25,
     "remove_unused_columns": False,  # preserve image inputs
+    # Mixed text/image ranks execute different parameter graphs. DDP can track
+    # those unused vision parameters; ZeRO-2 builds mismatched reduction buckets.
+    "deepspeed": None,
+    "ddp_find_unused_parameters": True,
+    # TRL <=1.17 conditionally gathers images only on ranks whose local batch
+    # has images, deadlocking distributed mixed text/image training (#8177).
+    "log_multimodal": False,
 }
 
 

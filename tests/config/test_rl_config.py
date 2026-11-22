@@ -45,6 +45,12 @@ class TestGRPODefaultProfiles:
         assert cfg["beta"] == 0.0
         assert cfg["vllm_mode"] == "colocate"
 
+    def test_vlm_grpo_uses_mixed_modality_safe_distributed_defaults(self):
+        cfg = TRAINING_DEFAULTS["DEFAULT_VLM_GRPO"]
+        assert cfg["deepspeed"] is None
+        assert cfg["ddp_find_unused_parameters"] is True
+        assert cfg["log_multimodal"] is False
+
 
 class TestGRPOSmoke:
     def test_minimal_grpo_materializes(self, tmp_path):
