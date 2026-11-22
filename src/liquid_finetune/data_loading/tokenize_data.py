@@ -148,8 +148,16 @@ def create_vlm_collate_fn(
             if assistant_only_loss:
                 labels = _build_labels(input_ids)
                 if assistant_masks is not None:
-                    labels = input_ids.clone()
-                    labels[~assistant_masks.to(dtype=torch.bool)] = -100
+                    native_mask = assistant_masks.to(dtype=torch.bool)
+                    native_labels = input_ids.clone()
+                    native_labels[~native_mask] = -100
+
+                    # Older pinned VLM templates (notably LFM2-VL) do not have
+                    # {% generation %} markers. Transformers returns an
+                    # all-zero mask in that case, so retain the ChatML fallback
+                    # for only those rows instead of training on zero tokens.
+                    has_native_span = native_mask.any(dim=-1)
+                    labels[has_native_span] = native_labels[has_native_span]
             else:
                 labels = input_ids.clone()
 
@@ -158,6 +166,13 @@ def create_vlm_collate_fn(
                 labels[~attention_mask.to(dtype=torch.bool)] = -100
             for token_id in multimodal_token_ids:
                 labels[input_ids == token_id] = -100
+
+            if assistant_only_loss and not (labels != -100).any(dim=-1).all():
+                raise ValueError(
+                    "No assistant tokens found after VLM chat-template masking. "
+                    "Use a template with {% generation %} markers or a supported "
+                    "ChatML assistant span."
+                )
 
             batch["labels"] = labels
             return batch
