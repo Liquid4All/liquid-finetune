@@ -4,7 +4,10 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 
-from liquid_finetune.training.moe_utils.ops import route_tokens_to_experts
+from liquid_finetune.training.moe_utils.ops import (
+    route_tokens_to_experts,
+    router_logits_for_block,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +176,7 @@ def _patch_block(block: nn.Module, config: MoETrainingConfig) -> None:
         batch_size, sequence_length, hidden_dim = hidden_states.shape
         x = hidden_states.view(-1, hidden_states.shape[-1])
 
-        router_logits = block.gate(x)
+        router_logits = router_logits_for_block(block, x)
         num_experts = router_logits.shape[-1]
 
         if config.z_loss_coef > 0:

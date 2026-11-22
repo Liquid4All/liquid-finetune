@@ -4,6 +4,20 @@ import torch
 import torch.nn as nn
 
 
+def router_logits_for_block(
+    block: nn.Module, hidden_states: torch.Tensor
+) -> torch.Tensor:
+    """Run either the legacy linear gate or the Transformers 5 router module."""
+    gate = block.gate
+    if hasattr(gate, "use_expert_bias"):
+        gate_output = gate(hidden_states, getattr(block, "expert_bias", None))
+    else:
+        gate_output = gate(hidden_states)
+    if isinstance(gate_output, tuple):
+        return gate_output[0]
+    return gate_output
+
+
 def grouped_mm(
     input_: torch.Tensor, weight: torch.Tensor, offs: torch.Tensor
 ) -> torch.Tensor:
@@ -89,7 +103,10 @@ def route_tokens_to_experts(
         selected_experts, routing_weights = block.route_tokens_to_experts(router_logits)
         return selected_experts, routing_weights, router_probs
 
-    top_k = getattr(block, "top_k")
+    gate = block.gate
+    top_k = getattr(block, "top_k", getattr(gate, "top_k", None))
+    if top_k is None:
+        raise AttributeError("MoE block router does not define top_k")
     expert_bias = getattr(block, "expert_bias", None)
     if expert_bias is not None:
         scores_for_routing = router_probs + expert_bias
@@ -99,12 +116,16 @@ def route_tokens_to_experts(
     else:
         routing_weights, selected_experts = torch.topk(router_probs, k=top_k, dim=-1)
 
-    if getattr(block, "norm_topk_prob", False):
+    if getattr(block, "norm_topk_prob", getattr(gate, "norm_topk_prob", False)):
         routing_weights = routing_weights / (
             routing_weights.sum(dim=-1, keepdim=True) + 1e-20
         )
 
-    scaling_factor = getattr(block, "scaling_factor", None)
+    scaling_factor = getattr(
+        block,
+        "scaling_factor",
+        getattr(gate, "routed_scaling_factor", None),
+    )
     if scaling_factor:
         routing_weights = routing_weights * scaling_factor
 
