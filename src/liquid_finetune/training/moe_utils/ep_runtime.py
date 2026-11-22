@@ -37,6 +37,7 @@ from liquid_finetune.training.moe_utils.ops import (
     grouped_mm,
     permute_tokens,
     route_tokens_to_experts,
+    router_logits_for_block,
     tokens_per_expert_from_routing,
     unpermute_tokens,
 )
@@ -581,7 +582,7 @@ def patch_moe_block_for_ep(
         }
         trace_stage("ep_moe_start", extra=stage_extra)
 
-        router_logits = block.gate(x)
+        router_logits = router_logits_for_block(block, x)
         n_experts = router_logits.shape[-1]
         trace_stage(
             "ep_after_router",

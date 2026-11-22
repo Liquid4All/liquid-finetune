@@ -24,6 +24,42 @@ class DummyContainer(nn.Module):
         self.block = Lfm2MoeSparseMoeBlock()
 
 
+class Transformers5Router(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn(2, 4))
+        self.top_k = 1
+        self.norm_topk_prob = True
+        self.routed_scaling_factor = 1.25
+        self.use_expert_bias = True
+
+    def forward(self, hidden_states, expert_bias=None):
+        assert expert_bias is not None
+        router_logits = nn.functional.linear(hidden_states, self.weight)
+        router_probs = router_logits.sigmoid()
+        _, selected_experts = torch.topk(
+            router_probs + expert_bias, k=self.top_k, dim=-1
+        )
+        routing_weights = torch.gather(router_probs, 1, selected_experts)
+        routing_weights = routing_weights / routing_weights.sum(dim=-1, keepdim=True)
+        return (
+            router_logits,
+            routing_weights * self.routed_scaling_factor,
+            selected_experts,
+        )
+
+
+def transformers_5_moe_block():
+    class Lfm2MoeSparseMoeBlock(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.gate = Transformers5Router()
+            self.expert_bias = nn.Buffer(torch.zeros(2))
+            self.experts = TrackingExperts()
+
+    return Lfm2MoeSparseMoeBlock()
+
+
 class TrackingExperts(nn.Module):
     def __init__(self) -> None:
         super().__init__()
@@ -89,3 +125,18 @@ def test_apply_moe_losses_delegates_non_ep_expert_compute_to_model_experts():
     assert output.shape == hidden_states.shape
     assert model.block.experts.called is True
     assert model.block.experts.last_hidden_shape == (6, 4)
+
+
+def test_apply_moe_losses_supports_transformers_5_router_modules():
+    torch.manual_seed(0)
+    model = nn.Module()
+    model.block = transformers_5_moe_block()
+
+    apply_moe_losses(model, MoETrainingConfig(aux_loss_coef=0.01, z_loss_coef=0.001))
+
+    hidden_states = torch.randn(2, 3, 4)
+    output = model.block(hidden_states)
+
+    assert output.shape == hidden_states.shape
+    assert model.block.experts.called is True
+    assert model.block._moe_num_experts == 2
