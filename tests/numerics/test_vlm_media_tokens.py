@@ -4,6 +4,7 @@ from liquid_finetune.data_loading.media_tokens import resolve_media_tokens
 from liquid_finetune.training.vlm_grpo import (
     _collapse_media_token_runs,
     _configure_media_generation_kwargs,
+    _patch_lfm2_vllm_weight_sync,
 )
 
 
@@ -45,3 +46,24 @@ def test_vllm_prompt_collapses_expanded_media_runs():
     assert _collapse_media_token_runs(
         [[1, 10, 10, 10, 2, 11, 11, 3, 10, 10, 4], [5, 6]], {10, 11}
     ) == [[1, 10, 2, 11, 3, 10, 4], [5, 6]]
+
+
+def test_lfm2_vllm_sync_restores_checkpoint_vision_prefix():
+    pushed = []
+    generation = SimpleNamespace(
+        _push_param_to_vllm=lambda name, param: pushed.append((name, param))
+    )
+    _patch_lfm2_vllm_weight_sync(generation, "lfm2_vl")
+
+    generation._push_param_to_vllm(
+        "model.vision_tower.embeddings.patch_embedding.weight", "vision"
+    )
+    generation._push_param_to_vllm("model.language_model.embed_tokens.weight", "text")
+
+    assert pushed == [
+        (
+            "model.vision_tower.vision_model.embeddings.patch_embedding.weight",
+            "vision",
+        ),
+        ("model.language_model.embed_tokens.weight", "text"),
+    ]
