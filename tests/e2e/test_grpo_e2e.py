@@ -29,14 +29,12 @@ from conftest import (
 pytestmark = pytest.mark.dense
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
-LFM3_TEXT_REVISION = "1da06bec6a819da10b54c67e5c90972b46d81871"
 
 
 def _write_lfm3_grpo_config(tmp_path, *, use_peft: bool, mode: str) -> str:
     config = yaml.safe_load((FIXTURES / "e2e_grpo.yaml").read_text())
     config["project_name"] = f"e2e_lfm3_grpo_{mode}"
     config["model_name"] = "LiquidAI/LFM3-1.7B"
-    config["model_revision"] = LFM3_TEXT_REVISION
     reward_path = FIXTURES / "grpo_reward.py"
     config["rewards"]["funcs"] = [f"{reward_path}::alternating_reward"]
     config["training_config"].update(

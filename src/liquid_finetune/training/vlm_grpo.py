@@ -14,10 +14,7 @@ normalize_visible_devices()
 from trl import GRPOConfig, GRPOTrainer
 
 from liquid_finetune.checkpointing.callback import LiquidCheckpointCallback
-from liquid_finetune.checkpointing.model_loading import (
-    load_vlm_model,
-    resolve_cached_model_snapshot,
-)
+from liquid_finetune.checkpointing.model_loading import load_vlm_model
 from liquid_finetune.data_loading.image_loader import load_image
 from liquid_finetune.data_loading.media_tokens import resolve_media_tokens
 from liquid_finetune.evaluation import (
@@ -297,16 +294,11 @@ def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -
 
     model, processor = load_vlm_model(
         model_name,
-        revision=training_config.get("model_revision"),
         min_image_tokens=min_image_tokens,
         max_image_tokens=max_image_tokens,
         do_image_splitting=do_image_splitting,
     )
     apply_model_generation_defaults(training_args, model, train_config_filtered)
-    if train_config.get("use_vllm") and train_config.get("vllm_mode") == "colocate":
-        model.name_or_path = resolve_cached_model_snapshot(
-            model_name, training_config.get("model_revision")
-        )
     prepare_model_for_qat(
         model,
         train_config,

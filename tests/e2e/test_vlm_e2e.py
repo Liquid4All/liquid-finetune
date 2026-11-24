@@ -14,7 +14,6 @@ from conftest import (
 pytestmark = pytest.mark.vlm
 
 FIXTURES = __import__("pathlib").Path(__file__).parent / "fixtures"
-LFM3_VL_REVISION = "23387beda43c60310348e83e25f78f33c3140d3a"
 
 
 # === VLM SFT with LoRA ===
@@ -133,8 +132,6 @@ def _write_vlm_sft_config(
     if model_name is not None:
         config["project_name"] = "e2e_lfm3_vlm"
         config["model_name"] = model_name
-        if model_name == "LiquidAI/LFM3-VL-2B":
-            config["model_revision"] = LFM3_VL_REVISION
         config["training_config"].update(
             {
                 "logging_steps": 2,
@@ -196,7 +193,6 @@ def _write_lfm3_vlm_dpo_config(tmp_path, *, use_peft: bool) -> str:
     config = {
         "project_name": "e2e_lfm3_vlm_dpo",
         "model_name": "LiquidAI/LFM3-VL-2B",
-        "model_revision": LFM3_VL_REVISION,
         "training_type": "vlm_dpo",
         "dataset": {
             "path": str(dataset_path),

@@ -33,7 +33,6 @@ from conftest import (
 pytestmark = pytest.mark.vlm
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
-LFM3_VL_REVISION = "23387beda43c60310348e83e25f78f33c3140d3a"
 
 
 def _write_multi_image_grpo_config(
@@ -80,7 +79,6 @@ def _write_multi_image_grpo_config(
         config["rewards"]["funcs"] = [f"{reward_path}::alternating_reward"]
         config["project_name"] = f"e2e_lfm3_vlm_grpo_{mode}"
         config["model_name"] = model_name
-        config["model_revision"] = LFM3_VL_REVISION
         config["training_config"].update(
             {
                 "max_steps": 2,

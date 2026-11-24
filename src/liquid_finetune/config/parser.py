@@ -584,7 +584,6 @@ def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
     return ResolvedJobConfig(
         job_name=project_name,
         model_name=model_name,
-        model_revision=job_config.model_revision,
         training_type=training_type,
         dataset=dataset,
         training_config=final_training_config,
@@ -699,8 +698,6 @@ def print_job_config_summary(job_config: ResolvedJobConfig) -> None:
 
     table.add_row("Project", job_config.job_name)
     table.add_row("Model", job_config.model_name)
-    if job_config.model_revision:
-        table.add_row("Model Revision", job_config.model_revision)
     table.add_row("Training Type", job_config.training_type)
     table.add_row(
         "Dataset", job_config.dataset.dataset_path if job_config.dataset else "None"
