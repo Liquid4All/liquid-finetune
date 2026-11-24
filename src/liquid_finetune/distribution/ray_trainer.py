@@ -137,7 +137,6 @@ def ray_trainer(job_config: dict) -> None:
             port = int(training_config.get("vllm_server_port", 8000))
             server_handle = launch_vllm_server(
                 model_id=_resolve_model_id(job_config["model_name"]),
-                model_revision=job_config.get("model_revision"),
                 vllm_gpu_ids=rollout_plan.server_gpu_ids,
                 grpo_rollout_cfg=grpo_rollout_cfg,
                 host="0.0.0.0",
@@ -161,7 +160,6 @@ def ray_trainer(job_config: dict) -> None:
                 port = int(judge_cfg.get("port", 8001))
                 judge_handle = launch_vllm_server(
                     model_id=model_id,
-                    model_revision=judge_cfg.get("revision"),
                     vllm_gpu_ids=rollout_plan.judge_gpu_ids,
                     grpo_rollout_cfg=_judge_server_config(
                         grpo_rollout_cfg,
@@ -264,7 +262,6 @@ def ray_trainer(job_config: dict) -> None:
     if use_pretokenize:
         tokenizer = load_tokenizer(
             job_config["model_name"],
-            revision=job_config.get("model_revision"),
             chat_template=training_config.get("chat_template"),
             chat_template_path=training_config.get("chat_template_path"),
         )
@@ -296,7 +293,6 @@ def ray_trainer(job_config: dict) -> None:
     # logical batch. Non-EP lets Ray split one shard per worker normally.
     train_loop_config = {
         "model_name": job_config["model_name"],
-        "model_revision": job_config.get("model_revision"),
         "job_name": job_config.get("job_name", "liquid-ft-run"),
         "train_config": training_config,
         "peft_config": job_config["peft_config"],

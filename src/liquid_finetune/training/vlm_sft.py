@@ -190,7 +190,6 @@ def vlm_sft_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
     # Load model + processor
     model, processor = load_vlm_model(
         model_name,
-        revision=training_config.get("model_revision"),
         min_image_tokens=min_image_tokens,
         max_image_tokens=max_image_tokens,
         do_image_splitting=do_image_splitting,

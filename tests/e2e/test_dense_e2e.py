@@ -16,7 +16,6 @@ from conftest import (
 pytestmark = pytest.mark.dense
 
 FIXTURES = __import__("pathlib").Path(__file__).parent / "fixtures"
-LFM3_TEXT_REVISION = "1da06bec6a819da10b54c67e5c90972b46d81871"
 
 
 # === Dense SFT with LoRA ===
@@ -80,7 +79,6 @@ class TestLFM3:
         config = yaml.safe_load((FIXTURES / fixture_name).read_text())
         config["project_name"] = "e2e_lfm3_sft"
         config["model_name"] = "LiquidAI/LFM3-1.7B"
-        config["model_revision"] = LFM3_TEXT_REVISION
         config["dataset"]["limit"] = 40
         config["evals"]["benchmarks"][0]["path"] = str(FIXTURES / "tiny_eval.jsonl")
         config["training_config"].update(
@@ -122,7 +120,6 @@ class TestLFM3:
         config = yaml.safe_load((FIXTURES / fixture_name).read_text())
         config["project_name"] = "e2e_lfm3_dpo"
         config["model_name"] = "LiquidAI/LFM3-1.7B"
-        config["model_revision"] = LFM3_TEXT_REVISION
         config["dataset"]["limit"] = 40
         config["evals"]["benchmarks"][0]["path"] = str(FIXTURES / "tiny_eval.jsonl")
         config["training_config"].update({"logging_steps": 2, "save_strategy": "epoch"})

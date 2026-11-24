@@ -106,7 +106,6 @@ def main() -> None:
     model, tokenizer = load_model(
         model_name,
         model_config=model_config,
-        revision=metadata.get("base_model_revision"),
         chat_template=chat_template,
         chat_template_path=args.chat_template_path,
     )

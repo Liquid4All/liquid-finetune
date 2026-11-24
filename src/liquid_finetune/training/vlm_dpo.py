@@ -224,7 +224,6 @@ def vlm_dpo_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
 
     model, processor = load_vlm_model(
         model_name,
-        revision=training_config.get("model_revision"),
         min_image_tokens=min_image_tokens,
         max_image_tokens=max_image_tokens,
         do_image_splitting=do_image_splitting,
@@ -241,7 +240,6 @@ def vlm_dpo_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
         policy_uses_peft=bool(peft_config or adapter_path),
         load_model=lambda: load_vlm_model(
             model_name,
-            revision=training_config.get("model_revision"),
             min_image_tokens=min_image_tokens,
             max_image_tokens=max_image_tokens,
             do_image_splitting=do_image_splitting,

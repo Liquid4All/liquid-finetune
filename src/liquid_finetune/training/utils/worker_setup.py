@@ -111,7 +111,6 @@ def load_causal_lm_for_training(
     return load_model(
         model_name,
         model_config=training_config.get("model_config"),
-        revision=training_config.get("model_revision"),
         chat_template=train_config.get("chat_template"),
         chat_template_path=train_config.get("chat_template_path"),
         **load_kwargs,

@@ -92,19 +92,6 @@ class TestVLMDataLoaderDefaults:
 
 
 class TestLFM3Compatibility:
-    def test_model_revision_survives_materialization(self):
-        revision = "1da06bec6a819da10b54c67e5c90972b46d81871"
-        job = JobConfig(
-            project_name="lfm3_revision",
-            model_name="LiquidAI/LFM3-1.7B",
-            model_revision=revision,
-            training_type="sft",
-            dataset=DatasetConfig(**BASE_SFT_DATASET),
-        )
-        materialized = materialize_job_config(job)
-        assert materialized.model_revision == revision
-        assert materialized.to_dict()["model_revision"] == revision
-
     def test_lfm3_compatibility_defaults(self):
         assert get_model_family("LiquidAI/LFM3-1.7B") == "lfm3"
         assert get_model_family("LiquidAI/LFM3-VL-2B") == "lfm3"

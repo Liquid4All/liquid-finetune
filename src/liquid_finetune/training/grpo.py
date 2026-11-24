@@ -16,10 +16,7 @@ from trl import GRPOConfig, GRPOTrainer
 
 from liquid_finetune.checkpointing.callback import LiquidCheckpointCallback
 from liquid_finetune.checkpointing.model_info import is_moe_model_from_name
-from liquid_finetune.checkpointing.model_loading import (
-    load_model,
-    resolve_cached_model_snapshot,
-)
+from liquid_finetune.checkpointing.model_loading import load_model
 from liquid_finetune.evaluation import (
     create_llm_benchmarks_from_config,
     make_eval_callback,
@@ -128,14 +125,8 @@ def grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -> No
     }
     training_args = GRPOConfig(**config_kwargs)
 
-    model, tokenizer = load_model(
-        model_name, revision=training_config.get("model_revision")
-    )
+    model, tokenizer = load_model(model_name)
     apply_model_generation_defaults(training_args, model, train_config_filtered)
-    if train_config.get("use_vllm") and train_config.get("vllm_mode") == "colocate":
-        model.name_or_path = resolve_cached_model_snapshot(
-            model_name, training_config.get("model_revision")
-        )
     prepare_model_for_qat(
         model,
         train_config,

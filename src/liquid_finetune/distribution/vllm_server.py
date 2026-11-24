@@ -348,7 +348,6 @@ def launch_vllm_server(
     model_id: str,
     vllm_gpu_ids: list[int],
     grpo_rollout_cfg: dict,
-    model_revision: str | None = None,
     host: str = "0.0.0.0",
     port: int = 8000,
     startup_timeout: float = 300.0,
@@ -420,8 +419,6 @@ def launch_vllm_server(
         "--gpu_memory_utilization",
         str(gpu_memory_utilization),
     ]
-    if model_revision is not None:
-        cmd += ["--revision", model_revision]
     if trust_remote_code:
         cmd += ["--trust_remote_code", "true"]
     if max_model_len is not None:
