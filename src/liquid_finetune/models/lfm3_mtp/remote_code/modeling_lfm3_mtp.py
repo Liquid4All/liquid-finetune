@@ -1,9 +1,10 @@
 # Remote-code module shipped into LFM3 checkpoints by `liquid-prepare-mtp`; it is copied next to
 # modeling_lfm3.py and imported from there (relative imports), never from the liquid_finetune package.
 #
-# LFM3 + one Multi-Token-Prediction (MTP) module, laid out like Qwen3.5's native MTP so an inference engine can reuse its
-# Qwen3.5 MTP path: mtp.pre_fc_norm_embedding, mtp.pre_fc_norm_hidden, mtp.fc (2H -> H), mtp.layers.0 (one LFM3 decoder
-# layer of the type of `mtp_init_from_layer`, full attention by default), mtp.norm; logits through the shared tied lm_head.
+# LFM3 + one Multi-Token-Prediction (MTP) module using Qwen3.5-style component names:
+# mtp.pre_fc_norm_embedding, mtp.pre_fc_norm_hidden, mtp.fc (2H -> H), mtp.layers.0 (one LFM3 decoder layer of the type of
+# `mtp_init_from_layer`, full attention by default), mtp.norm; logits through the shared tied lm_head. An inference engine
+# still needs an LFM3-specific implementation; the shared names do not make an existing Qwen MTP path architecture-compatible.
 #
 # Draft rule (DeepSeek-V3 / Qwen3-Next style): at position t the module takes the main model's final hidden state h_t
 # (after the final `embedding_norm`) and the embedding of token x_{t+1}, and predicts x_{t+2}:
@@ -60,7 +61,9 @@ def chunked_ce(hidden, targets, weight, chunk=4096):
     """Sum of token cross-entropies over positions with targets != -100, and their count."""
     keep = targets.ne(-100)
     hs, ys = hidden[keep], targets[keep]
-    total = hidden.new_zeros((), dtype=torch.float32)
+    # Keep an autograd connection for batches with no MTP-supervised tokens
+    # (for example, an assistant-only sample truncated before its response).
+    total = hidden.float().sum() * 0.0
     for s in range(0, hs.shape[0], chunk):
         h, y = hs[s : s + chunk], ys[s : s + chunk]
         total = total + (
@@ -69,6 +72,53 @@ def chunked_ce(hidden, targets, weight, chunk=4096):
             else _ce_sum(h, y, weight)
         )
     return total, keep.sum()
+
+
+def _mtp_mask_and_positions(attention_mask, position_ids, offset):
+    """Align masks/positions and isolate states that cross document boundaries."""
+    positions = position_ids[:, offset:]
+    continuous = positions.eq(position_ids[:, :-offset] + offset)
+    if attention_mask is None or (
+        torch.is_tensor(attention_mask)
+        and attention_mask.ndim == 2
+        and bool(attention_mask.all())
+    ):
+        if not bool(continuous.all()):
+            # The generic LFM3 mask recognizes a restart from position IDs. A
+            # cross-document draft state must be its own empty document, and
+            # the next valid state must restart again rather than attend it.
+            previous = torch.cat([positions[:, :1] - 1, positions[:, :-1]], dim=1)
+            positions = torch.where(continuous, positions, previous)
+        return None, positions
+    if not torch.is_tensor(attention_mask):
+        raise TypeError("MTP training expects attention_mask to be a tensor")
+    if attention_mask.ndim == 2:
+        # Draft state t combines the backbone state at t with the embedding at
+        # t + offset, so it is valid only when that complete input window is.
+        mask = attention_mask.unfold(1, offset + 1, 1).bool().all(-1)
+        return mask & continuous, positions
+    if attention_mask.ndim == 4:
+        return attention_mask[..., offset:, offset:], positions
+    raise ValueError(
+        f"MTP training expects a 2D or 4D attention_mask, got {attention_mask.ndim}D"
+    )
+
+
+def _shifted_targets(labels, position_ids, attention_mask, shift):
+    """Targets whose complete MTP context stays inside one non-padding sequence."""
+    targets = labels[:, shift:].clone()
+    valid = position_ids[:, shift:].eq(position_ids[:, :-shift] + shift)
+    if torch.is_tensor(attention_mask) and attention_mask.ndim == 2:
+        valid = valid & attention_mask.unfold(1, shift + 1, 1).bool().all(-1)
+    return targets.masked_fill(~valid, -100)
+
+
+def _loss_denominator(num_items, local_items, device):
+    if torch.is_tensor(num_items):
+        return num_items.to(device).float().clamp_min(1)
+    if num_items is not None:
+        return max(float(num_items), 1.0)
+    return local_items.clamp_min(1)
 
 
 class Lfm3MTP(nn.Module):
@@ -137,7 +187,14 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
             if m is not None
         ]
 
-    def mtp_hidden(self, last_hidden, input_ids, position_ids, detach_embed=False):
+    def mtp_hidden(
+        self,
+        last_hidden,
+        input_ids,
+        position_ids,
+        attention_mask=None,
+        detach_embed=False,
+    ):
         """MTP features for positions t = 0..T-2 (predicting x_{t+2}); shape (B, T-1, H)."""
         e = self.model.embed_tokens(input_ids[:, 1:])
         if detach_embed:
@@ -151,8 +208,8 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
                 dim=-1,
             )
         )
-        pos = position_ids[:, 1:]
-        masks = create_masks_by_layer_type(self.config, z, None, None, pos)
+        mask, pos = _mtp_mask_and_positions(attention_mask, position_ids, 1)
+        masks = create_masks_by_layer_type(self.config, z, mask, None, pos)
         pe = self.model.rotary_emb(z, position_ids=pos, layer_type=self.mtp.layer_type)
         for layer in self.mtp.layers:
             z = layer(
@@ -164,7 +221,14 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
             )
         return self.mtp.norm(z)
 
-    def mtp2_hidden(self, z1, input_ids, position_ids, detach_embed=False):
+    def mtp2_hidden(
+        self,
+        z1,
+        input_ids,
+        position_ids,
+        attention_mask=None,
+        detach_embed=False,
+    ):
         """Second-module features for positions t = 0..T-3 (predicting x_{t+3}); shape (B, T-2, H). z1 = mtp_hidden(...)
         (B, T-1, H), index t = module 1's state that predicts x_{t+2}; input at t = [E[x_{t+2}] ; z1_t] at RoPE position t+2."""
         m = self.mtp2
@@ -176,8 +240,8 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
                 [m.pre_fc_norm_embedding(e), m.pre_fc_norm_hidden(z1[:, :-1])], dim=-1
             )
         )
-        pos = position_ids[:, 2:]
-        masks = create_masks_by_layer_type(self.config, u, None, None, pos)
+        mask, pos = _mtp_mask_and_positions(attention_mask, position_ids, 2)
+        masks = create_masks_by_layer_type(self.config, u, mask, None, pos)
         pe = self.model.rotary_emb(u, position_ids=pos, layer_type=m.layer_type)
         for layer in m.layers:
             u = layer(
@@ -189,7 +253,14 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
             )
         return m.norm(u)
 
-    def mtp3_hidden(self, z2, input_ids, position_ids, detach_embed=False):
+    def mtp3_hidden(
+        self,
+        z2,
+        input_ids,
+        position_ids,
+        attention_mask=None,
+        detach_embed=False,
+    ):
         """Third-module features for positions t = 0..T-4 (predicting x_{t+4}); shape (B, T-3, H). z2 = mtp2_hidden(...)
         (B, T-2, H), index t = module 2's state that predicts x_{t+3}; input at t = [E[x_{t+3}] ; z2_t] at RoPE position t+3."""
         m = self.mtp3
@@ -201,8 +272,8 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
                 [m.pre_fc_norm_embedding(e), m.pre_fc_norm_hidden(z2[:, :-1])], dim=-1
             )
         )
-        pos = position_ids[:, 3:]
-        masks = create_masks_by_layer_type(self.config, u, None, None, pos)
+        mask, pos = _mtp_mask_and_positions(attention_mask, position_ids, 3)
+        masks = create_masks_by_layer_type(self.config, u, mask, None, pos)
         pe = self.model.rotary_emb(u, position_ids=pos, layer_type=m.layer_type)
         for layer in m.layers:
             u = layer(
@@ -214,7 +285,9 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
             )
         return m.norm(u)
 
-    def _multi_module_loss(self, h, input_ids, position_ids, labels, num_items):
+    def _multi_module_loss(
+        self, h, input_ids, position_ids, attention_mask, labels, num_items
+    ):
         """Frozen backbone, 2 or 3 sequential modules: for every trained module d, CE on x_{t+d+1} (hard), or Soft-MTP (mtp_soft):
         the same CE plus a value-neutral coupled CE that routes -W^T (p_main - onehot) into z_d, so module d's gradient is the
         gradient of KL(p_main.detach() || q_d) at the main state h_{t+d} that predicts the same token. Modules run only up to the
@@ -245,32 +318,41 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
             ):
                 if dpt == 1:
                     prev = self.mtp_hidden(
-                        hd, input_ids, position_ids, detach_embed=True
+                        hd,
+                        input_ids,
+                        position_ids,
+                        attention_mask,
+                        detach_embed=True,
                     )
                 elif dpt == 2:
                     prev = self.mtp2_hidden(
-                        prev, input_ids, position_ids, detach_embed=True
+                        prev,
+                        input_ids,
+                        position_ids,
+                        attention_mask,
+                        detach_embed=True,
                     )
                 else:
                     prev = self.mtp3_hidden(
-                        prev, input_ids, position_ids, detach_embed=True
+                        prev,
+                        input_ids,
+                        position_ids,
+                        attention_mask,
+                        detach_embed=True,
                     )
             zs[dpt] = prev
         total, n = None, None
         for dpt in sorted(mods, reverse=True):
-            z, y = zs[dpt][:, :-1], labels[:, dpt + 1 :]
+            z = zs[dpt][:, :-1]
+            y = _shifted_targets(labels, position_ids, attention_mask, dpt + 1)
             s, k = chunked_ce(z, y, W)
             if soft:
                 c, _ = chunked_ce(hd[:, dpt:-1] + (z.detach() - z), y, W)
                 s = s + c - c.detach()
             total, n = (s, k) if total is None else (total + s, n + k)
-        denom = (
-            num_items.to(h.device).float()
-            if torch.is_tensor(num_items)
-            else (float(num_items) if num_items is not None else None)
-        )
+        denom = _loss_denominator(num_items, n, h.device)
         return CausalLMOutputWithPast(
-            loss=total / (denom if denom is not None else n.clamp_min(1)),
+            loss=total / denom,
             logits=h.new_empty((0,)),
         )
 
@@ -322,7 +404,7 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
             ).last_hidden_state
         if self.mtp2 is not None:
             return self._multi_module_loss(
-                h, input_ids, position_ids, labels, num_items
+                h, input_ids, position_ids, attention_mask, labels, num_items
             )
         W = self.lm_head.weight
         thr = float(getattr(self.config, "mtp_joint_after_loss", 3.0))
@@ -336,28 +418,27 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
             self._mtp_warm_state = warm
         detach = train_only or warm
         z = self.mtp_hidden(
-            h.detach() if detach else h, input_ids, position_ids, detach_embed=detach
+            h.detach() if detach else h,
+            input_ids,
+            position_ids,
+            attention_mask,
+            detach_embed=detach,
         )
-        mtp_sum, mtp_n = chunked_ce(
-            z[:, :-1], labels[:, 2:], W.detach() if detach else W
-        )
+        mtp_targets = _shifted_targets(labels, position_ids, attention_mask, 2)
+        mtp_sum, mtp_n = chunked_ce(z[:, :-1], mtp_targets, W.detach() if detach else W)
         if self.training and not train_only:
             cur = float(mtp_sum.detach()) / max(1, int(mtp_n))
             self._mtp_loss_ema = cur if ema is None else 0.9 * ema + 0.1 * cur
         # HF semantics: with num_items_in_batch (global supervised-token count) divide by it (the Trainer then rescales
         # for the data-parallel average); without it, a per-batch token mean.
-        denom = (
-            num_items.to(h.device).float()
-            if torch.is_tensor(num_items)
-            else (float(num_items) if num_items is not None else None)
-        )
+        denom = _loss_denominator(num_items, mtp_n, h.device)
         soft = bool(getattr(self.config, "mtp_soft", False)) and torch.is_grad_enabled()
         if train_only:
             main_sum, main_n = None, labels[:, 1:].ne(-100).sum()
             if soft:  # Soft-MTP, frozen backbone: same weight as the MTP term (s = 1), value-neutral
                 c_sum, _ = chunked_ce(
                     h[:, 1:-1].detach() + (z[:, :-1].detach() - z[:, :-1]),
-                    labels[:, 2:],
+                    mtp_targets,
                     W.detach(),
                 )
                 mtp_sum = mtp_sum + c_sum - c_sum.detach()
@@ -367,7 +448,7 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
             if soft:  # Soft-MTP, joint: s = MTP-term weight / main-term weight (= lambda when both divide by num_items)
                 s = (
                     lam
-                    if denom is not None
+                    if num_items is not None
                     else lam * float(main_n) / max(1, int(mtp_n))
                 )
                 hn = torch.cat(
@@ -379,11 +460,11 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
                     dim=1,
                 )
             main_sum, _ = chunked_ce(hn[:, :-1], labels[:, 1:], W)
-        mtp_loss = mtp_sum / (denom if denom is not None else mtp_n.clamp_min(1))
+        mtp_loss = mtp_sum / denom
         loss = (
             mtp_loss
             if train_only
-            else main_sum / (denom if denom is not None else main_n.clamp_min(1))
+            else main_sum / _loss_denominator(num_items, main_n, h.device)
             + lam * mtp_loss
         )
         return CausalLMOutputWithPast(loss=loss, logits=h.new_empty((0,)))

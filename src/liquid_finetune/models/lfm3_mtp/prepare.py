@@ -3,8 +3,9 @@
 The output is a regular checkpoint directory that trains like any other model:
 ``config.json`` maps ``AutoModelForCausalLM`` to
 ``modeling_lfm3_mtp.Lfm3ForCausalLMWithMTP`` and carries the ``mtp_*`` settings, and
-the weights gain ``mtp.*`` (and ``mtp2.*`` / ``mtp3.*``) tensors in the layout inference
-engines use for Qwen3.5-style MTP.
+the weights gain ``mtp.*`` (and ``mtp2.*`` / ``mtp3.*``) tensors using Qwen3.5-style
+component names. An inference engine still needs an LFM3-specific MTP implementation;
+the prepared checkpoint is not by itself sufficient for vLLM speculative decoding.
 
 Modes:
   heads       frozen backbone, MTP loss only (the served model's outputs do not change)
@@ -116,9 +117,13 @@ def prepare_lfm3_mtp_checkpoint(
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
     if objective not in ("hard", "soft"):
         raise ValueError(f"objective must be 'hard' or 'soft', got {objective!r}")
+    if loss_weight < 0:
+        raise ValueError(f"loss_weight must be non-negative, got {loss_weight}")
 
     source_dir = _resolve_source(source, revision)
     out = pathlib.Path(output_dir).expanduser()
+    if out.resolve().is_relative_to(source_dir.resolve()):
+        raise ValueError("output_dir must not be inside the source checkpoint")
     if out.exists() and any(out.iterdir()):
         raise FileExistsError(f"{out} is not empty")
     shutil.copytree(source_dir, out, dirs_exist_ok=True)
@@ -131,6 +136,10 @@ def prepare_lfm3_mtp_checkpoint(
             f"Expected an LFM3 checkpoint, got {config.get('model_type')!r}"
         )
     layer = _default_init_layer(config) if init_from_layer is None else init_from_layer
+    if not 0 <= layer < len(config["layer_types"]):
+        raise ValueError(
+            f"init_from_layer must be between 0 and {len(config['layer_types']) - 1}, got {layer}"
+        )
     if config["layer_types"][layer] not in ("full_attention", "sliding_attention"):
         raise ValueError(
             f"init_from_layer {layer} is a {config['layer_types'][layer]} layer"
@@ -138,6 +147,8 @@ def prepare_lfm3_mtp_checkpoint(
 
     state = _load_weights(out)
     present = _present_modules(state)
+    if mode == "joint" and len(present) > 1:
+        raise ValueError("joint mode supports a single MTP module")
     added = 0
     if mode == "add-module":
         if not present:

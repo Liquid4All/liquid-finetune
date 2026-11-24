@@ -1100,7 +1100,7 @@ rows.
 ### LFM3 multi-token prediction (MTP) heads
 
 `liquid-prepare-mtp` turns an LFM3 checkpoint into a starting point for training
-MTP draft modules (for speculative decoding). The output is an ordinary
+MTP draft modules. The output is an ordinary
 checkpoint directory: `config.json` maps `AutoModelForCausalLM` to the bundled
 `modeling_lfm3_mtp.Lfm3ForCausalLMWithMTP`, and the weights gain `mtp.*` tensors
 laid out like Qwen3.5-style MTP (`pre_fc_norm_embedding`, `pre_fc_norm_hidden`,
@@ -1126,6 +1126,11 @@ The MTP model computes both losses itself over supervised positions, so the
 memory-efficient LM loss is not installed for it. Exports keep the `mtp.*`
 tensors and the modeling file; inference without labels is the unchanged LFM3
 forward.
+
+These checkpoints are not yet usable for speculative decoding in vLLM. The
+engine needs an LFM3-specific MTP implementation; Qwen3.5-style parameter names
+alone are not sufficient. This repository currently covers MTP training and
+Transformers checkpoint loading/generation.
 
 ## Contributing
 
