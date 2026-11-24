@@ -25,6 +25,6 @@ slurm:
   nodes: 1
   ntasks_per_node: 1
   gpus_per_task: 4
-  cpus_per_gpu: 14
+  cpus_per_gpu: 8
   output: "logs/OUT_%x.%j"
   error: "logs/ERR_%x.%j"

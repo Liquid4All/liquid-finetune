@@ -18,7 +18,7 @@ Environment overrides:
   NODES                    Number of nodes (default: 1)
   RAY_GPUS_PER_TASK        Ray job GPUs (default: 4)
   LOCAL_GPUS_PER_TASK      Local job GPUs (default: 1)
-  CPUS_PER_GPU             CPUs per GPU (default: 14)
+  CPUS_PER_GPU             CPUs per GPU (default: 8)
   GPU_TYPE                 Optional typed Slurm GPU resource name
   TIME_LIMIT               SLURM time limit (default: 06:00:00)
   OUTPUT_DIR               Root test result directory (default: <repo>/.test-results/e2e)
@@ -73,7 +73,7 @@ SLURM_DIR="${ROOT_DIR}/tests/e2e/slurm/generated"
 JOB_NAME="${JOB_NAME:-lft_e2e_tests}"
 PARTITION="${PARTITION:-}"
 NODES="${NODES:-1}"
-CPUS_PER_GPU="${CPUS_PER_GPU:-14}"
+CPUS_PER_GPU="${CPUS_PER_GPU:-8}"
 GPU_TYPE="${GPU_TYPE:-}"
 TIME_LIMIT="${TIME_LIMIT:-06:00:00}"
 TMP_ROOT="${TMP_ROOT:-/tmp}"
