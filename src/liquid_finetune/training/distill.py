@@ -8,7 +8,6 @@ from trl.experimental.utils import empty_cache
 
 from liquid_finetune.checkpointing.callback import LiquidCheckpointCallback
 from liquid_finetune.checkpointing.model_info import is_moe_model_from_name
-from liquid_finetune.checkpointing.model_loading import load_model
 from liquid_finetune.evaluation import (
     create_llm_benchmarks_from_config,
     make_eval_callback,
@@ -25,7 +24,7 @@ from liquid_finetune.training.sft import LFMDataCollatorForLanguageModeling
 from liquid_finetune.training.utils.config_filter import filter_runtime_config_kwargs
 from liquid_finetune.training.utils.distillation import (
     IGNORE_INDEX,
-    freeze_teacher_model,
+    load_teacher_model,
     prepare_fsdp_teacher,
     report_vocab_size,
     resolve_shared_vocab_size,
@@ -237,19 +236,6 @@ class LFMDistillTrainer(RayDataLoaderMixin, GKDTrainer):
 # === Training loop ===
 
 
-def _load_teacher(train_config: dict):
-    teacher_name = train_config.get("teacher_model_name_or_path")
-    if not teacher_name:
-        raise ValueError("training_config.teacher_model_name_or_path is required")
-    teacher_model, teacher_tokenizer = load_model(
-        teacher_name,
-        model_config=train_config.get("teacher_model_config"),
-        revision=train_config.get("teacher_model_revision"),
-        install_memory_efficient_loss=False,
-    )
-    return freeze_teacher_model(teacher_model), teacher_tokenizer
-
-
 def distill_run(training_config: dict, train_dataset=None, eval_dataset=None) -> None:
     """Run off-policy or mixed knowledge distillation locally or on a Ray worker."""
     train_dataset, eval_dataset, prepare_trainer = resolve_train_eval_datasets(
@@ -302,7 +288,7 @@ def distill_run(training_config: dict, train_dataset=None, eval_dataset=None) ->
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    teacher_model, teacher_tokenizer = _load_teacher(train_config)
+    teacher_model, teacher_tokenizer = load_teacher_model(train_config)
     resolve_shared_vocab_size(
         tokenizer,
         teacher_tokenizer,

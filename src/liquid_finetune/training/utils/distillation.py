@@ -12,6 +12,8 @@ from __future__ import annotations
 import contextlib
 import logging
 import math
+from collections.abc import Mapping
+from typing import Any
 
 import torch
 
@@ -428,6 +430,22 @@ def freeze_teacher_model(model):
     return model
 
 
+def load_teacher_model(train_config: Mapping[str, Any]):
+    """Load the frozen teacher with the same conventions as the student."""
+    from liquid_finetune.checkpointing.model_loading import load_model
+
+    teacher_name = train_config.get("teacher_model_name_or_path")
+    if not teacher_name:
+        raise ValueError("training_config.teacher_model_name_or_path is required")
+    teacher_model, teacher_tokenizer = load_model(
+        teacher_name,
+        model_config=train_config.get("teacher_model_config"),
+        revision=train_config.get("teacher_model_revision"),
+        install_memory_efficient_loss=False,
+    )
+    return freeze_teacher_model(teacher_model), teacher_tokenizer
+
+
 @contextlib.contextmanager
 def report_vocab_size(model, vocab_size: int):
     """Temporarily report ``vocab_size`` on ``model``'s text config.
@@ -461,3 +479,32 @@ def prepare_fsdp_teacher(accelerator, teacher):
     if original_forward is not None:
         teacher.forward = original_forward
     return prepare_fsdp(teacher, accelerator)
+
+
+# === Prompts for student generation ===
+
+
+def conversation_prompt(row: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Return the conversation a student should continue for one dataset row.
+
+    A ``prompt`` column is used as-is, with a plain string becoming a single
+    user turn. Otherwise ``messages`` is used without its final assistant turn.
+    """
+    prompt = row.get("prompt")
+    if isinstance(prompt, str):
+        if prompt.strip():
+            return [{"role": "user", "content": prompt}]
+    elif prompt is not None and len(prompt) > 0:
+        return [dict(message) for message in prompt]
+
+    messages = row.get("messages")
+    if messages is not None and len(messages) > 0:
+        messages = [dict(message) for message in messages]
+        if messages[-1].get("role") == "assistant":
+            messages = messages[:-1]
+        if messages:
+            return messages
+    raise ValueError(
+        "Each row needs a non-empty `prompt` (string or message list) or a "
+        "`messages` conversation with turns before the final assistant reply"
+    )
