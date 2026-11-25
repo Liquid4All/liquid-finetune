@@ -42,3 +42,7 @@ def test_grpo_respects_explicit_ray_dispatch(monkeypatch):
 def test_grpo_respects_ray_worker_count(monkeypatch):
     monkeypatch.setenv("LIQUID_NUM_WORKERS", "2")
     assert not local_trainer.should_use_local(_job())
+
+
+def test_distill_uses_local_path_for_one_gpu():
+    assert local_trainer.should_use_local(_job("distill"))
