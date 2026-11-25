@@ -54,6 +54,7 @@ from liquid_finetune.rl.judge import (
 )
 from liquid_finetune.training import (
     PRETOKENIZED_TRAINING_TYPES,
+    ROLLOUT_TRAINING_TYPES,
     TRAINING_DATASETS_TO_SPLIT,
     TRAINING_LOOPS,
 )
@@ -107,14 +108,14 @@ def ray_trainer(job_config: dict) -> None:
     normalize_visible_devices()
     local_num_gpus = cuda.device_count()
     training_config = job_config["training_config"]
-    is_grpo = training_type in ("grpo", "vlm_grpo")
+    uses_rollouts = training_type in ROLLOUT_TRAINING_TYPES
     grpo_rollout_cfg = job_config.get("grpo_rollout") or {}
     rewards_cfg = job_config.get("rewards")
     judge_cfg = get_judge_config(rewards_cfg)
     rollout_plan = None
     server_handles = []
 
-    if is_grpo:
+    if uses_rollouts:
         rollout_plan = resolve_vllm_rollout_plan(
             local_num_gpus,
             grpo_rollout_cfg,
@@ -126,7 +127,7 @@ def ray_trainer(job_config: dict) -> None:
         if rollout_plan.uses_custom_training_visibility:
             if ray.is_initialized():
                 raise RuntimeError(
-                    "GRPO vLLM GPU splitting must be resolved before Ray starts. "
+                    "vLLM rollout GPU splitting must be resolved before Ray starts. "
                     "Run this job in a fresh process or use an externally managed "
                     "vLLM server."
                 )
@@ -316,7 +317,7 @@ def ray_trainer(job_config: dict) -> None:
         )
 
     resources_per_worker = None
-    if is_grpo and rollout_plan is not None and not connect_existing_cluster:
+    if uses_rollouts and rollout_plan is not None and not connect_existing_cluster:
         num_workers = rollout_plan.num_training_workers
         resources_per_worker = rollout_plan.resources_per_worker
 
@@ -387,7 +388,7 @@ def ray_trainer(job_config: dict) -> None:
     # Each Ray worker runs TRAINING_LOOPS[training_type] with NCCL initialized by
     # Ray Train. Model loading, FSDP/EP wrapping, training, and saves happen there.
     uses_colocated_vllm = (
-        is_grpo
+        uses_rollouts
         and training_config.get("use_vllm", True)
         and training_config.get("vllm_mode", "colocate") == "colocate"
     )

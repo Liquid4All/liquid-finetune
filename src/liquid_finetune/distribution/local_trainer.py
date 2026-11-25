@@ -10,10 +10,21 @@ from liquid_finetune.data_loading.local_data import create_local_datasets
 from liquid_finetune.distribution.distributed_configs import (
     strip_distributed_training_config,
 )
-from liquid_finetune.training import TRAINING_LOOPS
+from liquid_finetune.training import ROLLOUT_TRAINING_TYPES, TRAINING_LOOPS
 
 _LOCAL_TYPES = frozenset(
-    {"sft", "dpo", "vlm_sft", "vlm_dpo", "grpo", "vlm_grpo", "moe_sft", "moe_dpo"}
+    {
+        "sft",
+        "dpo",
+        "distill",
+        "opd",
+        "vlm_sft",
+        "vlm_dpo",
+        "grpo",
+        "vlm_grpo",
+        "moe_sft",
+        "moe_dpo",
+    }
 )
 
 
@@ -25,7 +36,7 @@ def should_use_local(job_config: dict) -> bool:
     is_moe = is_moe_model_from_name(job_config["model_name"])
     if training_type not in _LOCAL_TYPES:
         return False
-    if training_type in {"grpo", "vlm_grpo"}:
+    if training_type in ROLLOUT_TRAINING_TYPES:
         train_config = job_config.get("training_config") or {}
         if train_config.get("vllm_mode", "colocate") != "colocate":
             return False
@@ -84,7 +95,7 @@ def local_trainer(job_config: dict):
     loop_type = f"moe_{base_type}" if is_moe else training_type
 
     tokenizer = None
-    if base_type in {"sft", "dpo"}:
+    if base_type in {"sft", "dpo", "distill"}:
         tokenizer = load_tokenizer(
             job_config["model_name"],
             chat_template=train_config.get("chat_template"),

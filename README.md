@@ -19,6 +19,7 @@
 <a href="#execution-backends">Backends</a> -
 <a href="#datasets">Datasets</a> -
 <a href="#grpo">GRPO</a> -
+<a href="#knowledge-distillation">Distillation</a> -
 <a href="#evaluation">Evaluation</a> -
 <a href="#quantization--gguf-export">GGUF</a> -
 <a href="#contributing">Contributing</a>
@@ -217,11 +218,11 @@ Launch training:
 uv run liquid-finetune job_configs/sft_example.yaml
 ```
 
-Training uses Ray Train and Accelerate for distributed execution. SFT, DPO, VLM
-SFT, and VLM DPO automatically use the native Hugging Face Trainer when exactly
-one GPU is visible. Text and VLM GRPO use the native Trainer only for one-GPU
-`vllm_mode: colocate` runs. Set `LIQUID_LAUNCHER=ray` to force Ray. Unless
-`output_dir` is set, results are written to
+Training uses Ray Train and Accelerate for distributed execution. SFT, DPO,
+distillation, VLM SFT, and VLM DPO automatically use the native Hugging Face
+Trainer when exactly one GPU is visible. Text and VLM GRPO and on-policy
+distillation use the native Trainer only for one-GPU `vllm_mode: colocate`
+runs. Set `LIQUID_LAUNCHER=ray` to force Ray. Unless `output_dir` is set, results are written to
 `outputs/{project_name}/{run_name}/`. Each run gets a unique name based on the
 model, dataset, learning rate, and timestamp.
 
@@ -238,6 +239,8 @@ Useful starter configs:
 | SFT                     | [`job_configs/sft_example.yaml`](./job_configs/sft_example.yaml)                               |
 | SFT + LoRA              | [`job_configs/sft_with_lora_example.yaml`](./job_configs/sft_with_lora_example.yaml)           |
 | DPO                     | [`job_configs/dpo_example.yaml`](./job_configs/dpo_example.yaml)                               |
+| Knowledge distillation  | [`job_configs/distill_example.yaml`](./job_configs/distill_example.yaml)                       |
+| On-policy distillation  | [`job_configs/opd_example.yaml`](./job_configs/opd_example.yaml)                               |
 | Dense embedding         | [`job_configs/embedding_example.yaml`](./job_configs/embedding_example.yaml)                   |
 | ColBERT                 | [`job_configs/colbert_example.yaml`](./job_configs/colbert_example.yaml)                       |
 | VLM SFT                 | [`job_configs/vlm_sft_example.yaml`](./job_configs/vlm_sft_example.yaml)                       |
@@ -284,9 +287,10 @@ uvx --from . liquid-finetune /absolute/path/to/config.yaml
 
 You can also start a run from Python. This uses the same backend dispatch as
 the CLI: configs with `slurm`, `modal`, or `kuberay` submit remotely; other
-configs run local training and require visible CUDA devices. SFT, DPO, VLM SFT,
-and VLM DPO use the native Trainer on one GPU; GRPO uses it only for one-GPU
-colocated vLLM; other modes use Ray.
+configs run local training and require visible CUDA devices. SFT, DPO,
+distillation, VLM SFT, and VLM DPO use the native Trainer on one GPU; GRPO and
+on-policy distillation use it only for one-GPU colocated vLLM; other modes use
+Ray.
 
 ```python
 from liquid_finetune import run_config
@@ -552,6 +556,15 @@ batch. Liquid preserves that batch order, uses the train batch size for evaluati
 and drops incomplete final batches. For imbalanced labels, tune
 `desirable_weight` and `undesirable_weight`; TRL logs a warning when the
 weights do not compensate for the label balance.
+
+### Distillation
+
+Distillation (`training_type: "distill"`) reuses the SFT `messages` format and
+tokenization pipeline with `dataset.type: "sft"`. The loss covers the
+dataset's assistant turns. On-policy distillation (`training_type: "opd"`)
+only needs prompts: use the GRPO prompt contract (`dataset.type: "grpo"`) or
+SFT conversations, whose final assistant turn the student regenerates. See
+[Knowledge Distillation](#knowledge-distillation).
 
 ### Retrieval and Embedding models
 
@@ -847,6 +860,220 @@ See
 [`src/liquid_finetune/rl/environments/README.md`](./src/liquid_finetune/rl/environments/README.md).
 For anything scorable by a pure Python function, prefer the `rewards:` path; it
 is simpler and faster.
+
+## Knowledge Distillation
+
+`training_type: "distill"` trains a student (`model_name`) to match the
+next-token distribution of a frozen teacher. It builds on TRL's
+`GKDTrainer` (generalized knowledge distillation,
+[Agarwal et al., 2024](https://huggingface.co/papers/2306.13649)) and reuses
+the SFT dataset, tokenization, Ray sharding, checkpointing, LoRA, and eval
+paths.
+
+```yaml
+model_name: "LFM2-1.2B" # student
+training_type: "distill"
+
+dataset:
+  path: "HuggingFaceTB/smoltalk"
+  type: "sft"
+  subset: "all"
+
+training_config:
+  extends: "DEFAULT_DISTILL"
+  teacher_model_name_or_path: "LFM2-2.6B"
+  chat_template_path: "chat_templates/lfm2_chat_template.jinja"
+  beta: 0.0 # forward KL
+  lmbda: 0.0 # off-policy: dataset completions only
+```
+
+See [`job_configs/distill_example.yaml`](./job_configs/distill_example.yaml)
+for commented reverse-KL, JSD, on-policy, and top-k variants.
+
+### Teacher
+
+The teacher is loaded like the student: short names resolve to Hub ids,
+remote code is trusted, weights are bf16, and the
+FlashAttention 2 / SDPA selection is the same. `teacher_model_revision` pins a
+Hub branch, tag, or commit, and `teacher_model_config` applies config
+overrides the way the top-level `model_config` does for the student. The
+teacher stays in eval mode with gradients disabled and is placed like DPO's
+reference model: a ZeRO stage-0 replica under DeepSpeed (sharded under
+ZeRO-3), wrapped with FSDP when the student uses FSDP, and moved to each
+worker's device otherwise.
+
+Teacher and student must share a tokenizer. The job fails before training if
+any token maps to a different id. Embedding sizes may differ by padding; the
+loss then uses the logit range both models share.
+
+### Dataset
+
+Rows use the SFT `messages` format. `DEFAULT_DISTILL` sets
+`assistant_only_loss: true`, so every assistant turn is distilled; use
+`completion_only_loss: true` to distill only the final turn. Both need a chat
+template with `{% generation %}` markers, which the bundled templates in
+[`job_configs/chat_templates/`](./job_configs/chat_templates/) provide.
+Packing and padding-free batches are not supported.
+
+### Objective
+
+The loss is TRL's generalized Jensen-Shannon divergence, computed per target
+token over the full vocabulary and averaged over target tokens. `beta` selects
+the divergence:
+
+| `beta`   | Divergence                    | Behavior                                                                                                                  |
+| -------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `0.0`    | Forward KL(teacher ‖ student) | Mass-covering: the student spreads probability over every token the teacher finds plausible. The usual off-policy choice. |
+| `1.0`    | Reverse KL(student ‖ teacher) | Mode-seeking: the student concentrates on the teacher's dominant modes. The standard objective on student-generated text. |
+| `(0, 1)` | Generalized JSD               | `beta * KL(teacher ‖ M) + (1 - beta) * KL(student ‖ M)` with `M = beta * teacher + (1 - beta) * student`; bounded.        |
+
+`lmbda` is the fraction of training steps that use student generations instead
+of dataset completions. `lmbda: 0.0` (the default) is pure off-policy KD;
+values between 0 and 1 mix in on-policy steps as in GKD. On-policy steps
+regenerate the final assistant turn of each row with `model.generate`, using
+`max_new_tokens` and the sampling `temperature`. `seq_kd: true` trains on
+teacher generations on the remaining steps. The loss itself is not
+temperature-scaled. On mixed runs the gradient-accumulation token count comes
+from the dataset completions, as in TRL. For fully on-policy training with
+vLLM rollouts, use [`opd`](#on-policy-distillation).
+
+### Top-k loss
+
+Full-vocabulary divergences keep several `(batch, sequence, vocab)` tensors
+alive, which dominates memory for 128K+ vocabularies and long sequences. Set
+`loss_top_k: k` to restrict the divergence at each target position to the
+teacher's top-k tokens (forward KL), the student's top-k (reverse KL), or the
+union of both (JSD):
+
+```yaml
+training_config:
+  loss_top_k: 64
+  loss_add_tail: true # default
+```
+
+With `loss_add_tail: true`, one extra bucket holds the probability mass
+outside the support, so both distributions stay normalized and the student is
+still penalized for mass it places elsewhere. With `loss_add_tail: false`,
+both distributions are renormalized over the support; for forward or reverse
+KL with `k = 1` that loss is identically zero. The top-k path only visits
+target positions, reduces the log-partition in float32 chunks, and recomputes
+the softmax in the backward pass, so beyond the logits and their gradient it
+needs `O(targets × k)` memory. `loss_top_k: null` (the default) keeps TRL's exact loss, and a `k` at
+or above the vocabulary size falls back to it. `use_liger_kernel: true` is an
+exact alternative that fuses the output projection with a chunked JSD; it
+cannot be combined with `loss_top_k`.
+
+### Memory and Hyperparameters
+
+- Both models stay resident. A bf16 teacher costs 2 bytes per parameter on
+  every GPU (about 5 GB for a 2.6B teacher) unless the student uses ZeRO-3 or
+  FSDP.
+- Each logits tensor is `batch × sequence × vocab`. With a 65,536-token
+  vocabulary, 4 × 2,048 tokens is about 1 GB in bf16 per model, and the
+  full-vocabulary loss holds several such tensors. Grow the effective batch
+  with `gradient_accumulation_steps`, and turn on `loss_top_k` (64 to 128 is a
+  reasonable start), `use_liger_kernel`, or `gradient_checkpointing` before
+  shrinking `max_length`.
+- Starting points for a student that has already been SFT'd on similar data:
+  learning rate 1e-5 to 3e-5 for full fine-tuning (LoRA usually needs about
+  10x more), 1 to 2 epochs, cosine schedule with a short warmup.
+  `DEFAULT_DISTILL` uses 2e-5, one epoch, and 5% warmup.
+- Track `eval_loss`, the mean per-token divergence to the teacher on held-out
+  conversations, alongside task benchmarks.
+
+### On-Policy Distillation
+
+`training_type: "opd"` always trains on the student's own samples: for every
+prompt the student generates `num_generations` completions (up to
+`max_completion_length` tokens), and the loss compares student and teacher on
+those completion tokens. It builds on TRL's `DistillationTrainer` and defaults
+to reverse KL (`beta: 1.0`), the standard on-policy distillation objective.
+`DEFAULT_OPD` samples at `temperature: 1.0`, `top_p: 1.0`, and `top_k: 0` so
+completions follow the student's own distribution; the loss uses the same
+temperature. `loss_top_k` and `loss_add_tail` work as in `distill` (on the
+student's top-k tokens for reverse KL), and teacher loading and the shared
+tokenizer check are the same.
+
+```yaml
+model_name: "LFM2-1.2B" # student
+training_type: "opd"
+
+dataset:
+  path: "HuggingFaceTB/smoltalk"
+  type: "sft" # or "grpo" for prompt-only rows
+  subset: "all"
+
+training_config:
+  extends: "DEFAULT_OPD"
+  teacher_model_name_or_path: "LFM2-2.6B"
+  beta: 1.0
+  max_completion_length: 512
+```
+
+Prompts reach the workers untokenized. With `dataset.type: "grpo"`, rows
+follow the [GRPO dataset contract](#dataset-contract): a `prompt` column
+(string or messages), or `messages` whose non-assistant turns become the
+prompt. With `dataset.type: "sft"`, everything before the final assistant turn
+is the prompt and the dataset completion is ignored. Prompts longer than
+`max_length - max_completion_length` tokens are truncated from the left.
+
+Student rollouts use the same vLLM integration as GRPO. `DEFAULT_OPD` runs
+vLLM colocated in each training worker; for a dedicated rollout GPU, set
+`vllm_mode: "server"` and reserve GPUs with the `grpo_rollout` block exactly as
+in [vLLM Rollouts](#vllm-rollouts). The driver then starts `trl vllm-serve`
+for the student, and training syncs the updated weights to it. Set
+`use_vllm: false` to generate with `model.generate` instead.
+
+Every optimizer step costs a generation pass, so start from a student that has
+already been SFT'd or distilled off-policy. `DEFAULT_OPD` uses a learning rate
+of 1e-6, like GRPO; values up to about 1e-5 are common for full fine-tuning.
+Prompt-only data has no completions to score, so `eval_strategy` defaults to
+`"no"`; track progress with `evals:` benchmarks.
+
+### Offline On-Policy Rounds
+
+When vLLM cannot run next to training, alternate sampling and off-policy
+distillation instead. Each round samples completions from the current student
+into an SFT dataset, then runs `distill` on them with reverse KL:
+
+```bash
+uv run liquid-sample-completions \
+  --model /path/to/current/student \
+  --dataset prompts.jsonl \
+  --chat-template-path job_configs/chat_templates/lfm2_chat_template.jinja \
+  --max-tokens 512 \
+  --output data/round_1.jsonl
+```
+
+```yaml
+model_name: "/path/to/current/student"
+training_type: "distill"
+
+dataset:
+  path: "data/round_1.jsonl"
+  type: "sft"
+
+training_config:
+  extends: "DEFAULT_DISTILL"
+  teacher_model_name_or_path: "LFM2-2.6B"
+  chat_template_path: "chat_templates/lfm2_chat_template.jinja"
+  beta: 1.0
+  lmbda: 0.0
+  assistant_only_loss: false
+  completion_only_loss: true
+```
+
+`liquid-sample-completions` reads a local `.jsonl`, `.json`, `.parquet`, or
+`.csv` file or a Hub dataset, renders each prompt (a `prompt` column, or
+`messages` without the final assistant turn) with the model's chat template,
+samples `--num-samples` completions per prompt with vLLM (temperature 1.0 by
+default), and writes one `messages` row per completion. Completions that hit
+`--max-tokens` are dropped unless `--keep-truncated` is set.
+`completion_only_loss: true` restricts the loss to the sampled final turn when
+prompts contain earlier assistant turns. Repeat with each newly trained
+student. Samples go stale as soon as the student changes, so keep rounds
+short (one epoch over a fresh sample) and match `--max-tokens` and the chat
+template to the training config.
 
 ## Evaluation
 

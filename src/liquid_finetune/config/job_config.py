@@ -13,6 +13,8 @@ TrainingType = Literal[
     "sft",
     "dpo",
     "kto",
+    "distill",
+    "opd",
     "embedding",
     "colbert",
     "vlm_sft",
@@ -404,13 +406,21 @@ class JobConfig(BaseModel):
                     "training_config.mini_batch_size requires a cached retrieval loss"
                 )
 
-        if self.training_type not in ("grpo", "vlm_grpo"):
-            for key in ("rewards", "rl_env", "grpo_rollout"):
-                if getattr(self, key) is not None:
-                    raise ValueError(
-                        f"Config key `{key}` is only valid for training_type in "
-                        f"('grpo', 'vlm_grpo'); got training_type={self.training_type!r}."
-                    )
+        online_keys = {
+            "rewards": ("grpo", "vlm_grpo"),
+            "rl_env": ("grpo", "vlm_grpo"),
+            # OPD reuses the GRPO vLLM rollout server settings.
+            "grpo_rollout": ("grpo", "vlm_grpo", "opd"),
+        }
+        for key, training_types in online_keys.items():
+            if (
+                self.training_type not in training_types
+                and getattr(self, key) is not None
+            ):
+                raise ValueError(
+                    f"Config key `{key}` is only valid for training_type in "
+                    f"{training_types}; got training_type={self.training_type!r}."
+                )
         qat = self.training_config.qat
         if (
             qat is not None

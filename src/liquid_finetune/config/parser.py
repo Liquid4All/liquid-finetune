@@ -32,6 +32,8 @@ TRAINING_TYPE_TO_CONFIG = {
     "sft": "DEFAULT_SFT",
     "dpo": "DEFAULT_DPO",
     "kto": "DEFAULT_KTO",
+    "distill": "DEFAULT_DISTILL",
+    "opd": "DEFAULT_OPD",
     "embedding": "DEFAULT_EMBEDDING",
     "colbert": "DEFAULT_COLBERT",
     "vlm_sft": "DEFAULT_VLM_SFT",
@@ -577,6 +579,12 @@ def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
         training_type,
         model_name,
     )
+    _validate_distillation_config(
+        final_train_values,
+        training_type,
+        dataset.dataset_type,
+        model_name,
+    )
 
     return ResolvedJobConfig(
         job_name=project_name,
@@ -681,6 +689,145 @@ def _validate_parallelism_config(
         raise ValueError(f"expert_parallel_size must be a power of 2, got {ep_size}")
 
 
+def _validate_unit_interval(training_config: dict[str, Any], key: str) -> float:
+    value = training_config.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"training_config.{key} must be a number in [0, 1]")
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(f"training_config.{key} must be in [0, 1], got {value}")
+    return float(value)
+
+
+def _validate_distillation_config(
+    training_config: dict[str, Any],
+    training_type: str,
+    dataset_type: str,
+    model_name: str,
+) -> None:
+    if training_type not in ("distill", "opd"):
+        return
+
+    teacher = training_config.get("teacher_model_name_or_path")
+    if not isinstance(teacher, str) or not teacher.strip():
+        raise ValueError(
+            f"training_type {training_type!r} requires "
+            "training_config.teacher_model_name_or_path"
+        )
+    if "teacher_model_init_kwargs" in training_config:
+        raise ValueError(
+            "training_config.teacher_model_init_kwargs is not supported; the "
+            "teacher is loaded like the student. Use teacher_model_revision or "
+            "teacher_model_config instead."
+        )
+    if is_moe_model_from_name(model_name):
+        raise ValueError(
+            f"training_type {training_type!r} does not support MoE students yet"
+        )
+    if training_config.get("qat") is not None:
+        raise ValueError(f"training_config.qat is not supported for {training_type}")
+
+    _validate_unit_interval(training_config, "beta")
+    top_k = training_config.get("loss_top_k")
+    if top_k is not None and (
+        isinstance(top_k, bool) or not isinstance(top_k, int) or top_k < 1
+    ):
+        raise ValueError(
+            f"training_config.loss_top_k must be a positive integer or null, got {top_k!r}"
+        )
+    if not isinstance(training_config.get("loss_add_tail", True), bool):
+        raise ValueError("training_config.loss_add_tail must be a boolean")
+    if top_k is not None and training_config.get("use_liger_kernel"):
+        raise ValueError(
+            "training_config.loss_top_k cannot be combined with use_liger_kernel; "
+            "the Liger kernel already computes the full-vocabulary loss in chunks"
+        )
+
+    if training_type == "distill":
+        _validate_offline_distillation(training_config, dataset_type)
+    else:
+        _validate_on_policy_distillation(training_config, dataset_type)
+
+
+def _validate_offline_distillation(
+    training_config: dict[str, Any], dataset_type: str
+) -> None:
+    if dataset_type != "sft":
+        raise ValueError(
+            "training_type 'distill' trains on conversations; set "
+            f"dataset.type: 'sft' (got {dataset_type!r})"
+        )
+    if training_config.get("packing") or training_config.get("padding_free"):
+        raise ValueError(
+            "distill feeds input_ids and attention_mask to both models; disable "
+            "packing and padding_free"
+        )
+
+    lmbda = _validate_unit_interval(training_config, "lmbda")
+    generates = lmbda > 0 or bool(training_config.get("seq_kd"))
+    if generates and not (
+        training_config.get("assistant_only_loss")
+        or training_config.get("completion_only_loss")
+    ):
+        raise ValueError(
+            "lmbda > 0 and seq_kd generate completions from each row's prompt; "
+            "enable assistant_only_loss or completion_only_loss so the prompt "
+            "boundary is known"
+        )
+
+
+def _validate_on_policy_distillation(
+    training_config: dict[str, Any], dataset_type: str
+) -> None:
+    if dataset_type not in ("grpo", "sft"):
+        raise ValueError(
+            "training_type 'opd' samples completions for each prompt; set "
+            "dataset.type: 'grpo' for prompt-only rows or 'sft' for "
+            f"conversations (got {dataset_type!r})"
+        )
+    for key in ("lmbda", "seq_kd"):
+        if key in training_config:
+            raise ValueError(
+                f"training_config.{key} applies to training_type 'distill'; "
+                "'opd' always trains on student generations"
+            )
+
+    num_generations = training_config.get("num_generations", 1)
+    if isinstance(num_generations, bool) or not isinstance(num_generations, int):
+        raise ValueError("training_config.num_generations must be an integer")
+    if num_generations < 1:
+        raise ValueError("training_config.num_generations must be >= 1")
+    local_batch = int(training_config.get("per_device_train_batch_size", 8)) * int(
+        training_config.get("gradient_accumulation_steps", 1) or 1
+    )
+    generation_batch_size = training_config.get("generation_batch_size")
+    if generation_batch_size is None and local_batch % num_generations:
+        raise ValueError(
+            "per_device_train_batch_size * gradient_accumulation_steps "
+            f"({local_batch}) must be divisible by num_generations "
+            f"({num_generations})"
+        )
+    if (
+        generation_batch_size is not None
+        and generation_batch_size * num_generations != local_batch
+    ):
+        raise ValueError(
+            "generation_batch_size * num_generations must equal "
+            "per_device_train_batch_size * gradient_accumulation_steps"
+        )
+
+    max_length = training_config.get("max_length")
+    max_completion_length = training_config.get("max_completion_length", 512)
+    if max_length is not None and max_completion_length >= max_length:
+        raise ValueError(
+            f"training_config.max_completion_length ({max_completion_length}) must "
+            f"be smaller than max_length ({max_length})"
+        )
+    if training_config.get("use_vllm") and training_config.get(
+        "vllm_mode", "colocate"
+    ) not in ("colocate", "server"):
+        raise ValueError("training_config.vllm_mode must be 'colocate' or 'server'")
+
+
 def print_job_config_summary(job_config: ResolvedJobConfig) -> None:
     from rich.console import Console
     from rich.panel import Panel
@@ -695,6 +842,8 @@ def print_job_config_summary(job_config: ResolvedJobConfig) -> None:
 
     table.add_row("Project", job_config.job_name)
     table.add_row("Model", job_config.model_name)
+    if config_value.get("teacher_model_name_or_path"):
+        table.add_row("Teacher", str(config_value["teacher_model_name_or_path"]))
     table.add_row("Training Type", job_config.training_type)
     table.add_row(
         "Dataset", job_config.dataset.dataset_path if job_config.dataset else "None"

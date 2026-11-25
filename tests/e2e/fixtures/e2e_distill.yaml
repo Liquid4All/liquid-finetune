@@ -1,0 +1,26 @@
+project_name: "e2e_distill"
+model_name: "LFM2-350M"
+training_type: "distill"
+
+dataset:
+  path: "HuggingFaceTB/smoltalk"
+  type: "sft"
+  limit: 64
+  test_size: 0.25
+  subset: "all"
+
+training_config:
+  extends: "DEFAULT_DISTILL"
+  teacher_model_name_or_path: "LFM2-1.2B"
+  chat_template_path: "job_configs/chat_templates/lfm2_chat_template.jinja"
+  num_train_epochs: 1
+  per_device_train_batch_size: 2
+  gradient_accumulation_steps: 1
+  max_length: 512
+  learning_rate: 2e-5
+  save_strategy: "no"
+  eval_strategy: "epoch"
+  logging_steps: 1
+
+peft_config:
+  use_peft: false
