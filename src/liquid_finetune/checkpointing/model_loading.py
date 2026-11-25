@@ -236,6 +236,7 @@ def load_model(
     chat_template_path: str | None = None,
     install_memory_efficient_loss: bool = True,
     enable_grouped_mm: bool = True,
+    revision: str | None = None,
 ) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
     """Load a model from the Hugging Face Hub or from a local path.
 
@@ -243,12 +244,16 @@ def load_model(
         model_name: HuggingFace model ID or local path
         model_config: optional overrides applied to the model config before loading
             (e.g. rope_scaling, max_position_embeddings for YaRN)
+        revision: optional Hub branch, tag, or commit hash to pin
     """
     attn_impl = _get_attn_implementation()
     model_id = _resolve_model_id(model_name)
+    revision_kwargs = {"revision": revision} if revision else {}
     logger.info(f"Loading model: {model_id}")
 
-    config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+    config = AutoConfig.from_pretrained(
+        model_id, trust_remote_code=True, **revision_kwargs
+    )
     normalized_model_config = normalize_model_config_overrides(config, model_config)
     if normalized_model_config:
         for key, value in normalized_model_config.items():
@@ -263,6 +268,7 @@ def load_model(
         dtype=torch.bfloat16,
         attn_implementation=attn_impl,
         trust_remote_code=True,
+        **revision_kwargs,
     )
     _enforce_lfm_tied_word_embeddings(model)
     model.config.use_cache = False
@@ -278,7 +284,9 @@ def load_model(
     else:
         logger.info("Skipping memory-efficient causal LM loss install")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id, trust_remote_code=True, **revision_kwargs
+    )
     tokenizer = _apply_chat_template_override(
         tokenizer,
         model_name=model_name,
