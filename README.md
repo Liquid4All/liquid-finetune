@@ -1097,35 +1097,71 @@ assistant completion. These options require a chat template with
 the bundled LFM templates include them. They are not used for plain-text SFT
 rows.
 
-### LFM3 multi-token prediction (MTP) heads
+### LFM3 multi-token prediction (MTP) draft heads
 
-`liquid-prepare-mtp` turns an LFM3 checkpoint into a starting point for training
-MTP draft modules. The output is an ordinary
-checkpoint directory: `config.json` maps `AutoModelForCausalLM` to the bundled
-`modeling_lfm3_mtp.Lfm3ForCausalLMWithMTP`, and the weights gain `mtp.*` tensors
-laid out like Qwen3.5-style MTP (`pre_fc_norm_embedding`, `pre_fc_norm_hidden`,
-`fc`, one decoder layer, `norm`; logits through the shared LM head).
+MTP draft heads let an LFM3 or LFM3-VL model draft several tokens ahead for
+speculative decoding. The model itself stays the verifier, so its outputs do
+not change. Add an `mtp:` section to a job and `liquid-finetune` builds the
+start point on the training node, then trains it:
 
-```bash
-liquid-prepare-mtp /path/to/lfm3-checkpoint ./checkpoints/lfm3-mtp --mode heads
-liquid-finetune job_configs/lfm3_mtp_heads_example.yaml
+```yaml
+model_name: "LiquidAI/LFM3-1.7B"   # or LiquidAI/LFM3-VL-2B with training_type: vlm_sft
+training_type: "sft"
+mtp:
+  num_draft_tokens: 3              # 1-5 sequential draft modules
+  objective: "soft"                # "hard" (labels) or "soft" (Soft-MTP)
+  train_backbone: false            # default: frozen backbone, draft modules only
 ```
 
-- `--mode heads` freezes the backbone and trains only the MTP module, so the
-  model's own outputs do not change. `--mode joint` trains main loss +
-  `--loss-weight` x MTP loss.
-- `--mode add-module` appends the next sequential module (up to three, each
-  drafting one more token ahead), initialised from the last one, and trains
-  only the new module.
-- `--objective soft` uses Soft-MTP gradient routing: each module learns the
-  main model's own next-token distribution instead of the one-hot label.
-- The first module is initialised from the last full-attention layer
-  (`--init-from-layer` to change it).
+See [`job_configs/lfm3_mtp_heads_example.yaml`](./job_configs/lfm3_mtp_heads_example.yaml).
 
-The MTP model computes both losses itself over supervised positions, so the
-memory-efficient LM loss is not installed for it. Exports keep the `mtp.*`
-tensors and the modeling file; inference without labels is the unchanged LFM3
-forward.
+- **Draft modules.** Module `d` drafts the token `d` positions after the
+  verifier's next token, from module `d-1`'s state and the embedding of the
+  previous draft token. Weights are top-level `mtp.*`, `mtp2.*`, ..., `mtp5.*`,
+  each using Qwen3.5-style component names (`pre_fc_norm_embedding`,
+  `pre_fc_norm_hidden`, `fc`, one decoder layer, `norm`; logits through the
+  shared LM head). The first module is initialised from the last full-attention
+  layer, later ones from the previous module.
+- **Frozen backbone** (default) trains only the draft modules. With
+  `train_backbone: true` the backbone trains too (main loss + `loss_weight` x
+  MTP loss); joint training supports a single draft token.
+- **`objective: soft`** uses Soft-MTP gradient routing
+  ([JaydenTeoh/Soft-MTP](https://github.com/JaydenTeoh/Soft-MTP)): each module
+  learns the main model's own next-token distribution instead of the one-hot
+  label.
+- **Existing draft modules.** A checkpoint that already has fewer modules than
+  `num_draft_tokens` is topped up, and only the new modules train.
+- **Text and vision-language.** Both backbones use the same module layout. A
+  VLM draft module sees the merged input embeddings, so image features are part
+  of its input. Training is full-parameter (no PEFT) with `sft` or `vlm_sft`.
+
+The same start point can be prepared by hand:
+
+```bash
+liquid-prepare-mtp LiquidAI/LFM3-1.7B ./checkpoints/lfm3-mtp --mode heads --num-draft-tokens 3
+```
+
+`--mode heads | joint | add-module` and `--objective hard | soft` match the
+YAML options; `add-module` appends one module to an existing MTP checkpoint.
+
+Measure how many drafts the verifier accepts:
+
+```bash
+liquid-eval-mtp ./checkpoints/lfm3-mtp-trained HuggingFaceTB/smoltalk --subset all --split test
+```
+
+It generates greedily with the model, runs the draft modules as they would run
+at inference, and reports tokens per verifier step and the acceptance rate at
+each depth for 1 to N drafts. This is a simulation of greedy verification in
+Transformers, not a measurement in an inference engine.
+
+Draft modules learn to predict text like their training data. LFM3 writes a
+reasoning trace before it answers, so modules trained only on answers accept
+few drafts; train on text that looks like the model's own generations and check
+with `liquid-eval-mtp`.
+
+Exports keep the `mtp*` tensors and the modeling files. Inference without
+labels is the unchanged LFM3 forward.
 
 These checkpoints are not yet usable for speculative decoding in vLLM. The
 engine needs an LFM3-specific MTP implementation; Qwen3.5-style parameter names

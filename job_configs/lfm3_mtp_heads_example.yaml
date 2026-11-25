@@ -1,10 +1,15 @@
-# Train an MTP (multi-token prediction) head for an LFM3 model.
-# First turn the checkpoint into an MTP start point:
-#   liquid-prepare-mtp /path/to/lfm3-checkpoint ./checkpoints/lfm3-mtp --mode heads
-# "heads" freezes the backbone, so the served model's own outputs do not change.
+# Train MTP (multi-token prediction) draft heads for an LFM3 model.
+# `mtp:` turns the checkpoint into an MTP start point on the training node and
+# trains it. With the backbone frozen (the default), the model's own outputs
+# do not change; the heads only add drafted tokens for speculative decoding.
+# For LFM3-VL use `training_type: vlm_sft` with a vlm_sft dataset.
 project_name: "my_lfm3_mtp_project"
-model_name: "./checkpoints/lfm3-mtp"
+model_name: "LiquidAI/LFM3-1.7B"
 training_type: "sft"
+
+mtp:
+  num_draft_tokens: 3 # 1-5 sequential draft modules
+  objective: "soft" # "hard" (labels) or "soft" (Soft-MTP)
 
 dataset:
   path: "HuggingFaceTB/smoltalk"
@@ -19,3 +24,6 @@ training_config:
   per_device_train_batch_size: 2
   learning_rate: 1e-4
   assistant_only_loss: true
+
+peft_config:
+  use_peft: false
