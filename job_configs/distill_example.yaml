@@ -1,0 +1,54 @@
+# Knowledge distillation (KD) from a larger teacher into a smaller student.
+#
+# The default objective is off-policy forward KL: on every assistant turn of
+# the dataset, the student is trained to match the teacher's full next-token
+# distribution. Teacher and student must share a tokenizer.
+#
+# Launch:
+#   uv run liquid-finetune job_configs/distill_example.yaml
+
+project_name: "my_distill_project"
+model_name: "LFM2-1.2B" # student
+training_type: "distill"
+
+dataset:
+  path: "HuggingFaceTB/smoltalk"
+  type: "sft"
+  limit: 1000
+  test_size: 0.2
+  subset: "all"
+
+training_config:
+  extends: "DEFAULT_DISTILL"
+  teacher_model_name_or_path: "LFM2-2.6B"
+  # teacher_model_revision: "main"
+  # assistant_only_loss needs {% generation %} markers in the chat template;
+  # the bundled LFM2 template provides them.
+  chat_template_path: "chat_templates/lfm2_chat_template.jinja"
+  num_train_epochs: 1
+  per_device_train_batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 2e-5
+  max_length: 2048
+
+  # Divergence (TRL generalized JSD):
+  #   beta: 0.0 -> forward KL(teacher || student), mass-covering (default)
+  #   beta: 1.0 -> reverse KL(student || teacher), mode-seeking
+  #   beta: 0.5 -> Jensen-Shannon divergence
+  beta: 0.0
+  # Fraction of steps that train on student generations instead of dataset
+  # completions. 0.0 is pure off-policy KD; 0.5 is mixed (GKD).
+  lmbda: 0.0
+  # max_new_tokens: 256   # completion length for on-policy steps
+  # seq_kd: true          # train on teacher generations when not on-policy
+
+  # Memory-saving top-k loss. Restricts the divergence to the teacher's top-k
+  # tokens (forward KL), the student's (reverse KL), or both (JSD), plus one
+  # tail bucket holding the remaining probability mass.
+  # loss_top_k: 64
+  # loss_add_tail: true
+
+# Optional LoRA student; the teacher is always loaded frozen.
+# peft_config:
+#   extends: "DEFAULT_LORA"
+#   use_peft: true

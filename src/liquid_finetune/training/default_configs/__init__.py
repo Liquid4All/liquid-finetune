@@ -1,3 +1,4 @@
+from liquid_finetune.training.default_configs.distill_configs import DEFAULT_DISTILL
 from liquid_finetune.training.default_configs.dpo_configs import (
     DEFAULT_DPO,
     DEFAULT_VLM_DPO,
@@ -28,6 +29,7 @@ TRAINING_DEFAULTS = {
     "DEFAULT_SFT": DEFAULT_SFT,
     "DEFAULT_DPO": DEFAULT_DPO,
     "DEFAULT_KTO": DEFAULT_KTO,
+    "DEFAULT_DISTILL": DEFAULT_DISTILL,
     "DEFAULT_EMBEDDING": DEFAULT_EMBEDDING,
     "DEFAULT_COLBERT": DEFAULT_COLBERT,
     "DEFAULT_VLM_SFT": DEFAULT_VLM_SFT,
@@ -49,6 +51,7 @@ PEFT_DEFAULTS = {
 }
 
 __all__ = [
+    "DEFAULT_DISTILL",
     "DEFAULT_DPO",
     "DEFAULT_EMBEDDING",
     "DEFAULT_COLBERT",
