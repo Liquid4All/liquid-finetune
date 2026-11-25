@@ -13,7 +13,17 @@ from liquid_finetune.distribution.distributed_configs import (
 from liquid_finetune.training import TRAINING_LOOPS
 
 _LOCAL_TYPES = frozenset(
-    {"sft", "dpo", "vlm_sft", "vlm_dpo", "grpo", "vlm_grpo", "moe_sft", "moe_dpo"}
+    {
+        "sft",
+        "dpo",
+        "distill",
+        "vlm_sft",
+        "vlm_dpo",
+        "grpo",
+        "vlm_grpo",
+        "moe_sft",
+        "moe_dpo",
+    }
 )
 
 
@@ -84,7 +94,7 @@ def local_trainer(job_config: dict):
     loop_type = f"moe_{base_type}" if is_moe else training_type
 
     tokenizer = None
-    if base_type in {"sft", "dpo"}:
+    if base_type in {"sft", "dpo", "distill"}:
         tokenizer = load_tokenizer(
             job_config["model_name"],
             chat_template=train_config.get("chat_template"),

@@ -13,6 +13,7 @@ TrainingType = Literal[
     "sft",
     "dpo",
     "kto",
+    "distill",
     "embedding",
     "colbert",
     "vlm_sft",

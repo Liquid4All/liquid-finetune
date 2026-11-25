@@ -16,6 +16,7 @@ _TRAINING_LOOP_TARGETS = MappingProxyType(
         "sft": ("liquid_finetune.training.sft", "sft_run"),
         "dpo": ("liquid_finetune.training.dpo", "dpo_run"),
         "kto": ("liquid_finetune.training.kto", "kto_run"),
+        "distill": ("liquid_finetune.training.distill", "distill_run"),
         "embedding": ("liquid_finetune.training.embedding", "embedding_run"),
         "colbert": ("liquid_finetune.training.colbert", "colbert_run"),
         "vlm_sft": ("liquid_finetune.training.vlm_sft", "vlm_sft_run"),
@@ -28,7 +29,7 @@ _TRAINING_LOOP_TARGETS = MappingProxyType(
 )
 
 
-PRETOKENIZED_TRAINING_TYPES = frozenset({"sft", "dpo", "moe_sft", "moe_dpo"})
+PRETOKENIZED_TRAINING_TYPES = frozenset({"sft", "dpo", "distill", "moe_sft", "moe_dpo"})
 
 # Ray splits these datasets across workers. Datasets omitted from each tuple are
 # replicated, which lets rank zero report metrics over the complete eval set.
@@ -70,6 +71,7 @@ def __getattr__(name: str):
         "sft_run": "sft",
         "dpo_run": "dpo",
         "kto_run": "kto",
+        "distill_run": "distill",
         "embedding_run": "embedding",
         "colbert_run": "colbert",
         "vlm_sft_run": "vlm_sft",
@@ -91,6 +93,7 @@ __all__ = [
     "sft_run",
     "dpo_run",
     "kto_run",
+    "distill_run",
     "embedding_run",
     "colbert_run",
     "vlm_sft_run",
