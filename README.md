@@ -220,9 +220,9 @@ uv run liquid-finetune job_configs/sft_example.yaml
 
 Training uses Ray Train and Accelerate for distributed execution. SFT, DPO,
 distillation, VLM SFT, and VLM DPO automatically use the native Hugging Face
-Trainer when exactly one GPU is visible. Text and VLM GRPO use the native Trainer only for one-GPU
-`vllm_mode: colocate` runs. Set `LIQUID_LAUNCHER=ray` to force Ray. Unless
-`output_dir` is set, results are written to
+Trainer when exactly one GPU is visible. Text and VLM GRPO use the native
+Trainer only for one-GPU `vllm_mode: colocate` runs. Set `LIQUID_LAUNCHER=ray`
+to force Ray. Unless `output_dir` is set, results are written to
 `outputs/{project_name}/{run_name}/`. Each run gets a unique name based on the
 model, dataset, learning rate, and timestamp.
 
@@ -286,9 +286,9 @@ uvx --from . liquid-finetune /absolute/path/to/config.yaml
 
 You can also start a run from Python. This uses the same backend dispatch as
 the CLI: configs with `slurm`, `modal`, or `kuberay` submit remotely; other
-configs run local training and require visible CUDA devices. SFT, DPO, VLM SFT,
-and VLM DPO use the native Trainer on one GPU; GRPO uses it only for one-GPU
-colocated vLLM; other modes use Ray.
+configs run local training and require visible CUDA devices. SFT, DPO,
+distillation, VLM SFT, and VLM DPO use the native Trainer on one GPU; GRPO uses
+it only for one-GPU colocated vLLM; other modes use Ray.
 
 ```python
 from liquid_finetune import run_config
@@ -555,7 +555,7 @@ and drops incomplete final batches. For imbalanced labels, tune
 `desirable_weight` and `undesirable_weight`; TRL logs a warning when the
 weights do not compensate for the label balance.
 
-### Knowledge Distillation
+### Distillation
 
 Distillation (`training_type: "distill"`) reuses the SFT `messages` format and
 tokenization pipeline with `dataset.type: "sft"`. The loss covers the
