@@ -14,6 +14,7 @@ from liquid_finetune.training.default_configs.retrieval_configs import (
     DEFAULT_EMBEDDING,
 )
 from liquid_finetune.training.default_configs.kto_configs import DEFAULT_KTO
+from liquid_finetune.training.default_configs.opd_configs import DEFAULT_OPD
 from liquid_finetune.training.default_configs.sft_configs import DEFAULT_SFT, MOE_SFT
 from liquid_finetune.training.default_configs.vlm_sft_configs import DEFAULT_VLM_SFT
 from liquid_finetune.training.peft.peft_configs import (
@@ -30,6 +31,7 @@ TRAINING_DEFAULTS = {
     "DEFAULT_DPO": DEFAULT_DPO,
     "DEFAULT_KTO": DEFAULT_KTO,
     "DEFAULT_DISTILL": DEFAULT_DISTILL,
+    "DEFAULT_OPD": DEFAULT_OPD,
     "DEFAULT_EMBEDDING": DEFAULT_EMBEDDING,
     "DEFAULT_COLBERT": DEFAULT_COLBERT,
     "DEFAULT_VLM_SFT": DEFAULT_VLM_SFT,
@@ -58,6 +60,7 @@ __all__ = [
     "DEFAULT_GRPO",
     "DEFAULT_KTO",
     "DEFAULT_LORA",
+    "DEFAULT_OPD",
     "DEFAULT_SFT",
     "DEFAULT_VLM_DPO",
     "DEFAULT_VLM_GRPO",

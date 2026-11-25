@@ -17,6 +17,7 @@ _TRAINING_LOOP_TARGETS = MappingProxyType(
         "dpo": ("liquid_finetune.training.dpo", "dpo_run"),
         "kto": ("liquid_finetune.training.kto", "kto_run"),
         "distill": ("liquid_finetune.training.distill", "distill_run"),
+        "opd": ("liquid_finetune.training.opd", "opd_run"),
         "embedding": ("liquid_finetune.training.embedding", "embedding_run"),
         "colbert": ("liquid_finetune.training.colbert", "colbert_run"),
         "vlm_sft": ("liquid_finetune.training.vlm_sft", "vlm_sft_run"),
@@ -39,8 +40,13 @@ TRAINING_DATASETS_TO_SPLIT = MappingProxyType(
         "colbert": ("train",),
         "grpo": (),
         "vlm_grpo": (),
+        "opd": (),
     }
 )
+
+# Training types that generate completions while training and can roll out
+# with vLLM, either colocated in each worker or on a local `trl vllm-serve`.
+ROLLOUT_TRAINING_TYPES = frozenset({"grpo", "vlm_grpo", "opd"})
 
 
 class _TrainingLoopRegistry(Mapping[str, Callable[[dict], None]]):
@@ -72,6 +78,7 @@ def __getattr__(name: str):
         "dpo_run": "dpo",
         "kto_run": "kto",
         "distill_run": "distill",
+        "opd_run": "opd",
         "embedding_run": "embedding",
         "colbert_run": "colbert",
         "vlm_sft_run": "vlm_sft",
@@ -89,11 +96,13 @@ def __getattr__(name: str):
 __all__ = [
     "TRAINING_LOOPS",
     "PRETOKENIZED_TRAINING_TYPES",
+    "ROLLOUT_TRAINING_TYPES",
     "TRAINING_DATASETS_TO_SPLIT",
     "sft_run",
     "dpo_run",
     "kto_run",
     "distill_run",
+    "opd_run",
     "embedding_run",
     "colbert_run",
     "vlm_sft_run",

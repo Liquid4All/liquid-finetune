@@ -25,7 +25,7 @@ def one_visible_gpu(monkeypatch):
     monkeypatch.delenv("LIQUID_NUM_WORKERS", raising=False)
 
 
-@pytest.mark.parametrize("training_type", ["grpo", "vlm_grpo"])
+@pytest.mark.parametrize("training_type", ["grpo", "vlm_grpo", "opd"])
 def test_grpo_uses_local_path_only_for_one_gpu_colocate(training_type):
     assert local_trainer.should_use_local(_job(training_type))
     assert not local_trainer.should_use_local(_job(training_type, vllm_mode="server"))
