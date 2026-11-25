@@ -216,10 +216,14 @@ def load_tokenizer(
     *,
     chat_template: str | None = None,
     chat_template_path: str | None = None,
+    revision: str | None = None,
 ) -> AutoTokenizer:
     """Load only the tokenizer (lightweight, no model weights)."""
     model_id = _resolve_model_id(model_name)
-    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    revision_kwargs = {"revision": revision} if revision else {}
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id, trust_remote_code=True, **revision_kwargs
+    )
     return _apply_chat_template_override(
         tokenizer,
         model_name=model_name,
