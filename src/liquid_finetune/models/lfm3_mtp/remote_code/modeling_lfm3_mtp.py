@@ -1,7 +1,7 @@
 # Remote-code module shipped into LFM3 checkpoints by `liquid-prepare-mtp`; it is copied next to
 # modeling_lfm3.py and imported from there (relative imports), never from the liquid_finetune package.
 #
-# LFM3 + one Multi-Token-Prediction (MTP) module using Qwen3.5-style component names:
+# LFM3 + Multi-Token-Prediction (MTP) draft modules using Qwen3.5-style component names:
 # mtp.pre_fc_norm_embedding, mtp.pre_fc_norm_hidden, mtp.fc (2H -> H), mtp.layers.0 (one LFM3 decoder layer of the type of
 # `mtp_init_from_layer`, full attention by default), mtp.norm; logits through the shared tied lm_head. An inference engine
 # still needs an LFM3-specific implementation; the shared names do not make an existing Qwen MTP path architecture-compatible.
@@ -27,14 +27,19 @@
 # the token after next: at position t it takes module 1's post-norm output z1_t (the state that predicts x_{t+2}) and the
 # embedding of x_{t+2}, runs at RoPE position t+2 with causal self-attention over its own states, and predicts x_{t+3}:
 #   u_t = mtp2.fc([mtp2.pre_fc_norm_embedding(E[x_{t+2}]) ; mtp2.pre_fc_norm_hidden(z1_t)]);  logits_{t+3} = lm_head(mtp2.norm(layer(u)_t)).
-# mtp_num_modules = 3 adds a third sequential module `mtp3` (same layout) that drafts x_{t+4}: at position t it takes module 2's
+# mtp_num_modules = 3..5 add further sequential modules `mtp3`..`mtp5` (same layout); module d drafts x_{t+d+1}. E.g. module 3 drafts x_{t+4}: at position t it takes module 2's
 # post-norm output z2_t (the state that predicts x_{t+3}) and the embedding of x_{t+3}, runs at RoPE position t+3 with causal
 # self-attention over its own states, and predicts x_{t+4}.
 # mtp_train_modules (frozen backbone only): which modules train, e.g. [2] keeps module 1 frozen; default = every module present.
-# With 2 or 3 modules: mtp_train_only=True only; the hard objective (CE of module d on x_{t+d+1}) or mtp_soft (Soft-MTP for every
+# With 2 to 5 modules: mtp_train_only=True only; the hard objective (CE of module d on x_{t+d+1}) or mtp_soft (Soft-MTP for every
 # trained module d: h_{t+d}, the main state that predicts the same token, gets (z_d.detach() - z_d) added inside a coupled
 # value-neutral CE, so module d's gradient is W^T (q_d - p_main) = the gradient of KL(p_main.detach() || q_d); the reported loss
 # stays the hard CE).
+# Backbones: the MTP math lives in `Lfm3MTPMixin` and only needs the decoder's final hidden states, the decoder's INPUT
+# embeddings, the text config and the shared lm_head. `Lfm3ForCausalLMWithMTP` (text) and, in modeling_lfm3_vl_mtp.py,
+# `Lfm3VlForConditionalGenerationWithMTP` (vision-language) supply those; for the VLM the draft input E[x_{t+1}] is the
+# merged input embedding (image/video features at their placeholder positions), as in Qwen3.5-VL MTP. Weights are
+# top-level `mtp.*` / `mtp2.*` / `mtp3.*` for both, and mtp_* keys sit on the top-level config.
 # Inference / generation (no labels) runs the unchanged LFM3 forward. Training computes both cross-entropies over
 # supervised positions only, in checkpointed chunks, so no full-vocabulary logits are materialised.
 import contextlib
@@ -52,6 +57,16 @@ from .modeling_lfm3 import (
     create_masks_by_layer_type,
 )
 
+MAX_MTP_MODULES = 5
+
+
+def mtp_module_name(depth):
+    """Attribute / weight prefix of draft module ``depth`` (1-based): mtp, mtp2, ..., mtp5."""
+    return "mtp" if depth == 1 else f"mtp{depth}"
+
+
+_MODULE_PREFIXES = {d: f"{mtp_module_name(d)}." for d in range(1, MAX_MTP_MODULES + 1)}
+
 
 def _ce_sum(hidden, targets, weight):
     return F.cross_entropy(F.linear(hidden, weight).float(), targets, reduction="sum")
@@ -61,9 +76,11 @@ def chunked_ce(hidden, targets, weight, chunk=4096):
     """Sum of token cross-entropies over positions with targets != -100, and their count."""
     keep = targets.ne(-100)
     hs, ys = hidden[keep], targets[keep]
-    # Keep an autograd connection for batches with no MTP-supervised tokens
-    # (for example, an assistant-only sample truncated before its response).
-    total = hidden.float().sum() * 0.0
+    total = hidden.new_zeros((), dtype=torch.float32)
+    if torch.is_grad_enabled() and hidden.requires_grad:
+        # No supervised position still has to backpropagate: a detached zero would make
+        # the loss fail in backward on this rank while the others wait on it.
+        total = total + hidden.reshape(-1, hidden.shape[-1])[:0].float().sum()
     for s in range(0, hs.shape[0], chunk):
         h, y = hs[s : s + chunk], ys[s : s + chunk]
         total = total + (
@@ -121,61 +138,74 @@ def _loss_denominator(num_items, local_items, device):
     return local_items.clamp_min(1)
 
 
+def default_mtp_init_layer(text_config):
+    return max(
+        i for i, t in enumerate(text_config.layer_types) if t == "full_attention"
+    )
+
+
 class Lfm3MTP(nn.Module):
-    def __init__(self, config):
+    def __init__(self, text_config, init_from_layer):
         super().__init__()
-        H = config.hidden_size
-        src = int(
-            getattr(
-                config,
-                "mtp_init_from_layer",
-                max(
-                    i for i, t in enumerate(config.layer_types) if t == "full_attention"
-                ),
-            )
-        )
-        self.layer_type = config.layer_types[src]
+        H = text_config.hidden_size
+        src = int(init_from_layer)
+        self.layer_type = text_config.layer_types[src]
         if self.layer_type == "conv":
             raise ValueError("the MTP layer must be an attention layer type")
-        self.pre_fc_norm_embedding = Lfm3RMSNorm(H, eps=config.norm_eps)
-        self.pre_fc_norm_hidden = Lfm3RMSNorm(H, eps=config.norm_eps)
+        self.pre_fc_norm_embedding = Lfm3RMSNorm(H, eps=text_config.norm_eps)
+        self.pre_fc_norm_hidden = Lfm3RMSNorm(H, eps=text_config.norm_eps)
         self.fc = nn.Linear(2 * H, H, bias=False)
-        self.layers = nn.ModuleList([Lfm3DecoderLayer(config, src)])
-        self.norm = Lfm3RMSNorm(H, eps=config.norm_eps)
+        self.layers = nn.ModuleList([Lfm3DecoderLayer(text_config, src)])
+        self.norm = Lfm3RMSNorm(H, eps=text_config.norm_eps)
 
 
-class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
-    def __init__(self, config):
-        super().__init__(config)
-        on = int(getattr(config, "mtp_num_hidden_layers", 0) or 0) > 0
-        self.mtp = Lfm3MTP(config) if on else None
-        self.mtp2 = (
-            Lfm3MTP(config)
-            if on and int(getattr(config, "mtp_num_modules", 1) or 1) >= 2
-            else None
-        )
-        if on and int(getattr(config, "mtp_num_modules", 1) or 1) >= 3:
-            self.mtp3 = Lfm3MTP(config)
-        else:
-            self.mtp3 = None
-        self.post_init()
+class Lfm3MTPMixin:
+    """MTP modules + losses on top of any LFM3 decoder backbone.
+
+    Subclasses provide ``_mtp_text_config()``, ``_mtp_text_model()`` (the ``Lfm3Model`` with ``rotary_emb``) and
+    ``_mtp_backbone(...)`` returning ``(final_hidden, input_embeds)``; ``lm_head`` is the shared output head.
+    """
+
+    def _init_mtp_modules(self):
+        cfg, text = self.config, self._mtp_text_config()
+        on = int(getattr(cfg, "mtp_num_hidden_layers", 0) or 0) > 0
+        n = int(getattr(cfg, "mtp_num_modules", 1) or 1) if on else 0
+        if n > MAX_MTP_MODULES:
+            raise ValueError(
+                f"mtp_num_modules={n}; at most {MAX_MTP_MODULES} MTP modules are supported"
+            )
+        src = getattr(cfg, "mtp_init_from_layer", None)
+        src = default_mtp_init_layer(text) if src is None else int(src)
+        for depth in range(1, MAX_MTP_MODULES + 1):
+            module = Lfm3MTP(text, src) if depth <= n else None
+            setattr(self, mtp_module_name(depth), module)
 
     @classmethod
     def from_pretrained(cls, *args, **kwargs):
-        out = super().from_pretrained(*args, **kwargs)
-        model = (
-            out[0] if isinstance(out, tuple) else out
-        )  # output_loading_info=True returns (model, info)
+        want_info = kwargs.pop("output_loading_info", False)
+        model, info = super().from_pretrained(*args, output_loading_info=True, **kwargs)
+        out = (model, info) if want_info else model
+        missing = sorted(
+            key
+            for key in info.get("missing_keys", ())
+            if key.startswith(tuple(_MODULE_PREFIXES.values()))
+        )
+        if missing:
+            raise ValueError(
+                "The checkpoint has no weights for its configured MTP modules "
+                f"(e.g. {missing[0]}); they would start from random values. Prepare it with "
+                "liquid-prepare-mtp or an `mtp:` job section."
+            )
         if model.mtp is not None and bool(
             getattr(model.config, "mtp_train_only", False)
         ):
             # frozen backbone: only the MTP module(s) in mtp_train_modules train (default: every module present);
-            # lm_head / embeddings stay the main model's
+            # lm_head / embeddings (and a VLM's vision tower / projector) stay the main model's
             mods = (
                 getattr(model.config, "mtp_train_modules", None)
                 or model._present_modules()
             )
-            prefixes = tuple({1: "mtp.", 2: "mtp2.", 3: "mtp3."}[int(m)] for m in mods)
+            prefixes = tuple(_MODULE_PREFIXES[int(m)] for m in mods)
             for name, p in model.named_parameters():
                 p.requires_grad_(name.startswith(prefixes))
         return out
@@ -183,118 +213,87 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
     def _present_modules(self):
         return [
             d
-            for d, m in ((1, self.mtp), (2, self.mtp2), (3, self.mtp3))
-            if m is not None
+            for d in range(1, MAX_MTP_MODULES + 1)
+            if getattr(self, mtp_module_name(d), None) is not None
         ]
 
-    def mtp_hidden(
-        self,
-        last_hidden,
-        input_ids,
-        position_ids,
-        attention_mask=None,
-        detach_embed=False,
+    def _mtp_module_hidden(
+        self, m, prev, embeds, position_ids, attention_mask, depth, detach_embed
     ):
-        """MTP features for positions t = 0..T-2 (predicting x_{t+2}); shape (B, T-1, H)."""
-        e = self.model.embed_tokens(input_ids[:, 1:])
+        """Module ``depth`` (1-based) on ``prev`` (B, T-depth+1, H): at index t the input is
+        [E_{t+depth} ; prev_t] at RoPE position t+depth; returns (B, T-depth, H)."""
+        if embeds.shape[1] <= depth:  # no position left to draft from
+            return prev[:, :0]
+        e = embeds[:, depth:]
         if detach_embed:
             e = e.detach()
-        z = self.mtp.fc(
+        z = m.fc(
             torch.cat(
-                [
-                    self.mtp.pre_fc_norm_embedding(e),
-                    self.mtp.pre_fc_norm_hidden(last_hidden[:, :-1]),
-                ],
+                [m.pre_fc_norm_embedding(e), m.pre_fc_norm_hidden(prev[:, :-1])],
                 dim=-1,
             )
         )
-        mask, pos = _mtp_mask_and_positions(attention_mask, position_ids, 1)
-        masks = create_masks_by_layer_type(self.config, z, mask, None, pos)
-        pe = self.model.rotary_emb(z, position_ids=pos, layer_type=self.mtp.layer_type)
-        for layer in self.mtp.layers:
+        mask, pos = _mtp_mask_and_positions(attention_mask, position_ids, depth)
+        masks = create_masks_by_layer_type(self._mtp_text_config(), z, mask, None, pos)
+        pe = self._mtp_text_model().rotary_emb(
+            z, position_ids=pos, layer_type=m.layer_type
+        )
+        for layer in m.layers:
             z = layer(
                 z,
-                attention_mask=masks[self.mtp.layer_type],
-                position_embeddings=pe,
-                position_ids=pos,
-                past_key_values=None,
-            )
-        return self.mtp.norm(z)
-
-    def mtp2_hidden(
-        self,
-        z1,
-        input_ids,
-        position_ids,
-        attention_mask=None,
-        detach_embed=False,
-    ):
-        """Second-module features for positions t = 0..T-3 (predicting x_{t+3}); shape (B, T-2, H). z1 = mtp_hidden(...)
-        (B, T-1, H), index t = module 1's state that predicts x_{t+2}; input at t = [E[x_{t+2}] ; z1_t] at RoPE position t+2."""
-        m = self.mtp2
-        e = self.model.embed_tokens(input_ids[:, 2:])
-        if detach_embed:
-            e = e.detach()
-        u = m.fc(
-            torch.cat(
-                [m.pre_fc_norm_embedding(e), m.pre_fc_norm_hidden(z1[:, :-1])], dim=-1
-            )
-        )
-        mask, pos = _mtp_mask_and_positions(attention_mask, position_ids, 2)
-        masks = create_masks_by_layer_type(self.config, u, mask, None, pos)
-        pe = self.model.rotary_emb(u, position_ids=pos, layer_type=m.layer_type)
-        for layer in m.layers:
-            u = layer(
-                u,
                 attention_mask=masks[m.layer_type],
                 position_embeddings=pe,
                 position_ids=pos,
                 past_key_values=None,
             )
-        return m.norm(u)
+        return m.norm(z)
 
-    def mtp3_hidden(
+    def mtp_module_hidden(
         self,
-        z2,
-        input_ids,
+        depth,
+        prev,
+        embeds,
         position_ids,
         attention_mask=None,
         detach_embed=False,
     ):
-        """Third-module features for positions t = 0..T-4 (predicting x_{t+4}); shape (B, T-3, H). z2 = mtp2_hidden(...)
-        (B, T-2, H), index t = module 2's state that predicts x_{t+3}; input at t = [E[x_{t+3}] ; z2_t] at RoPE position t+3."""
-        m = self.mtp3
-        e = self.model.embed_tokens(input_ids[:, 3:])
-        if detach_embed:
-            e = e.detach()
-        u = m.fc(
-            torch.cat(
-                [m.pre_fc_norm_embedding(e), m.pre_fc_norm_hidden(z2[:, :-1])], dim=-1
-            )
+        """Draft module ``depth`` on the previous state ``prev`` (the final hidden states for depth 1, module
+        depth-1's output otherwise): index t predicts x_{t+depth+1}; shape (B, T-depth, H)."""
+        return self._mtp_module_hidden(
+            getattr(self, mtp_module_name(depth)),
+            prev,
+            embeds,
+            position_ids,
+            attention_mask,
+            depth,
+            detach_embed,
         )
-        mask, pos = _mtp_mask_and_positions(attention_mask, position_ids, 3)
-        masks = create_masks_by_layer_type(self.config, u, mask, None, pos)
-        pe = self.model.rotary_emb(u, position_ids=pos, layer_type=m.layer_type)
-        for layer in m.layers:
-            u = layer(
-                u,
-                attention_mask=masks[m.layer_type],
-                position_embeddings=pe,
-                position_ids=pos,
-                past_key_values=None,
+
+    @torch.no_grad()
+    def mtp_draft_states(
+        self, last_hidden, embeds, position_ids, num_tokens=None, attention_mask=None
+    ):
+        """Post-norm states of the first ``num_tokens`` draft modules (all by default), chained as at inference:
+        entry d-1 has shape (B, T-d, H) and index t drafts x_{t+d+1}. Score them with ``lm_head``."""
+        depths = self._present_modules()[: num_tokens or None]
+        states, prev = [], last_hidden
+        for depth in depths:
+            prev = self.mtp_module_hidden(
+                depth, prev, embeds, position_ids, attention_mask
             )
-        return m.norm(u)
+            states.append(prev)
+        return states
 
     def _multi_module_loss(
-        self, h, input_ids, position_ids, attention_mask, labels, num_items
+        self, h, embeds, position_ids, attention_mask, labels, num_items
     ):
-        """Frozen backbone, 2 or 3 sequential modules: for every trained module d, CE on x_{t+d+1} (hard), or Soft-MTP (mtp_soft):
+        """Frozen backbone, 2 to 5 sequential modules: for every trained module d, CE on x_{t+d+1} (hard), or Soft-MTP (mtp_soft):
         the same CE plus a value-neutral coupled CE that routes -W^T (p_main - onehot) into z_d, so module d's gradient is the
         gradient of KL(p_main.detach() || q_d) at the main state h_{t+d} that predicts the same token. Modules run only up to the
         deepest trained one; a module runs with grad only if it or an earlier module trains."""
         if not bool(getattr(self.config, "mtp_train_only", False)):
             raise NotImplementedError(
-                "2 or 3 MTP modules support mtp_train_only=True (frozen backbone) only"
+                "2 or more MTP modules support mtp_train_only=True (frozen backbone) only"
             )
         soft = bool(getattr(self.config, "mtp_soft", False)) and torch.is_grad_enabled()
         mods = sorted(
@@ -304,42 +303,27 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
                 or self._present_modules()
             )
         )
-        assert all(m in self._present_modules() for m in mods), (
-            f"mtp_train_modules {mods} vs modules present {self._present_modules()}"
-        )
+        if not all(m in self._present_modules() for m in mods):
+            raise ValueError(
+                f"mtp_train_modules {mods} vs modules present {self._present_modules()}"
+            )
         W = self.lm_head.weight.detach()
         hd = h.detach()
-        zs, prev = {}, None
+        zs, prev = {}, hd
         for dpt in range(1, max(mods) + 1):
             with (
                 contextlib.nullcontext()
                 if any(m <= dpt for m in mods)
                 else torch.no_grad()
             ):
-                if dpt == 1:
-                    prev = self.mtp_hidden(
-                        hd,
-                        input_ids,
-                        position_ids,
-                        attention_mask,
-                        detach_embed=True,
-                    )
-                elif dpt == 2:
-                    prev = self.mtp2_hidden(
-                        prev,
-                        input_ids,
-                        position_ids,
-                        attention_mask,
-                        detach_embed=True,
-                    )
-                else:
-                    prev = self.mtp3_hidden(
-                        prev,
-                        input_ids,
-                        position_ids,
-                        attention_mask,
-                        detach_embed=True,
-                    )
+                prev = self.mtp_module_hidden(
+                    dpt,
+                    prev,
+                    embeds,
+                    position_ids,
+                    attention_mask,
+                    detach_embed=True,
+                )
             zs[dpt] = prev
         total, n = None, None
         for dpt in sorted(mods, reverse=True):
@@ -356,35 +340,15 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
             logits=h.new_empty((0,)),
         )
 
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        position_ids=None,
-        past_key_values=None,
-        inputs_embeds=None,
-        labels=None,
-        use_cache=None,
-        logits_to_keep=0,
-        **kwargs,
+    def _mtp_forward(
+        self, input_ids, attention_mask, position_ids, labels, backbone_kwargs
     ):
-        if labels is None or self.mtp is None:
-            return super().forward(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                inputs_embeds=inputs_embeds,
-                labels=labels,
-                use_cache=use_cache,
-                logits_to_keep=logits_to_keep,
-                **kwargs,
-            )
+        """Training forward with labels: main/MTP losses only, no full-vocabulary logits."""
         if input_ids is None:
             raise ValueError(
                 "MTP training needs input_ids (the draft input is the embedding of the next token)"
             )
-        num_items = kwargs.pop("num_items_in_batch", None)
+        num_items = backbone_kwargs.pop("num_items_in_batch", None)
         train_only = bool(getattr(self.config, "mtp_train_only", False))
         lam = float(getattr(self.config, "mtp_loss_weight", 0.3))
         if position_ids is None:
@@ -394,17 +358,12 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
                 .expand(input_ids.shape[0], -1)
             )
         with torch.no_grad() if train_only else contextlib.nullcontext():
-            h = self.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                inputs_embeds=inputs_embeds,
-                use_cache=False,
-                **kwargs,
-            ).last_hidden_state
-        if self.mtp2 is not None:
+            h, embeds = self._mtp_backbone(
+                input_ids, attention_mask, position_ids, backbone_kwargs
+            )
+        if len(self._present_modules()) > 1:
             return self._multi_module_loss(
-                h, input_ids, position_ids, attention_mask, labels, num_items
+                h, embeds, position_ids, attention_mask, labels, num_items
             )
         W = self.lm_head.weight
         thr = float(getattr(self.config, "mtp_joint_after_loss", 3.0))
@@ -417,9 +376,10 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
             )
             self._mtp_warm_state = warm
         detach = train_only or warm
-        z = self.mtp_hidden(
+        z = self.mtp_module_hidden(
+            1,
             h.detach() if detach else h,
-            input_ids,
+            embeds,
             position_ids,
             attention_mask,
             detach_embed=detach,
@@ -470,4 +430,99 @@ class Lfm3ForCausalLMWithMTP(Lfm3ForCausalLM):
         return CausalLMOutputWithPast(loss=loss, logits=h.new_empty((0,)))
 
 
-__all__ = ["Lfm3ForCausalLMWithMTP", "Lfm3MTP"]
+class Lfm3ForCausalLMWithMTP(Lfm3MTPMixin, Lfm3ForCausalLM):
+    def __init__(self, config):
+        super().__init__(config)
+        self._init_mtp_modules()
+        self.post_init()
+
+    def _mtp_text_config(self):
+        return self.config
+
+    def _mtp_text_model(self):
+        return self.model
+
+    def _mtp_backbone(self, input_ids, attention_mask, position_ids, kwargs):
+        embeds = self.model.embed_tokens(input_ids)
+        h = self.model(
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            inputs_embeds=embeds,
+            use_cache=False,
+            **kwargs,
+        ).last_hidden_state
+        return h, embeds
+
+    def _module_hidden_from_ids(
+        self, depth, prev, input_ids, position_ids, attention_mask, detach_embed
+    ):
+        return self.mtp_module_hidden(
+            depth,
+            prev,
+            self.model.embed_tokens(input_ids),
+            position_ids,
+            attention_mask,
+            detach_embed,
+        )
+
+    def mtp_hidden(
+        self,
+        last_hidden,
+        input_ids,
+        position_ids,
+        attention_mask=None,
+        detach_embed=False,
+    ):
+        """MTP features for positions t = 0..T-2 (predicting x_{t+2}); shape (B, T-1, H)."""
+        return self._module_hidden_from_ids(
+            1, last_hidden, input_ids, position_ids, attention_mask, detach_embed
+        )
+
+    def mtp2_hidden(
+        self, z1, input_ids, position_ids, attention_mask=None, detach_embed=False
+    ):
+        """Second-module features for positions t = 0..T-3 (predicting x_{t+3}); shape (B, T-2, H). z1 = mtp_hidden(...);
+        input at t = [E[x_{t+2}] ; z1_t] at RoPE position t+2."""
+        return self._module_hidden_from_ids(
+            2, z1, input_ids, position_ids, attention_mask, detach_embed
+        )
+
+    def mtp3_hidden(
+        self, z2, input_ids, position_ids, attention_mask=None, detach_embed=False
+    ):
+        """Third-module features for positions t = 0..T-4 (predicting x_{t+4}); shape (B, T-3, H). z2 = mtp2_hidden(...);
+        input at t = [E[x_{t+3}] ; z2_t] at RoPE position t+3."""
+        return self._module_hidden_from_ids(
+            3, z2, input_ids, position_ids, attention_mask, detach_embed
+        )
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        inputs_embeds=None,
+        labels=None,
+        use_cache=None,
+        logits_to_keep=0,
+        **kwargs,
+    ):
+        if labels is None or self.mtp is None:
+            return super().forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                labels=labels,
+                use_cache=use_cache,
+                logits_to_keep=logits_to_keep,
+                **kwargs,
+            )
+        return self._mtp_forward(
+            input_ids, attention_mask, position_ids, labels, kwargs
+        )
+
+
+__all__ = ["Lfm3ForCausalLMWithMTP", "Lfm3MTP", "Lfm3MTPMixin"]

@@ -294,6 +294,7 @@ def vlm_grpo_run(training_config: dict, train_dataset=None, eval_dataset=None) -
 
     model, processor = load_vlm_model(
         model_name,
+        model_config=training_config.get("model_config"),
         min_image_tokens=min_image_tokens,
         max_image_tokens=max_image_tokens,
         do_image_splitting=do_image_splitting,
