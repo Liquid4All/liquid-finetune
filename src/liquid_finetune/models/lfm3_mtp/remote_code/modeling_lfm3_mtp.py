@@ -92,7 +92,15 @@ def chunked_ce(hidden, targets, weight, chunk=4096):
 
 
 def _mtp_mask_and_positions(attention_mask, position_ids, offset):
-    """Align masks/positions and isolate states that cross document boundaries."""
+    """Attention mask and document-boundary positions for the draft states of ``offset``.
+
+    Draft state t is built from the backbone state at source position t (it only embeds the token at
+    t + offset), so documents follow the SOURCE positions. FlashAttention-2 finds the document starts of
+    a packed row as the places where ``position_ids`` equals its minimum, and the generic LFM3 mask finds
+    them from restarts; both need the true restarts. Rewriting the shifted positions to isolate states
+    that cross a document boundary can remove position 0 from the first document and hand the kernel
+    boundaries that do not start at 0 (a GPU memory fault for offsets >= 2).
+    """
     positions = position_ids[:, offset:]
     continuous = positions.eq(position_ids[:, :-offset] + offset)
     if attention_mask is None or (
@@ -100,13 +108,9 @@ def _mtp_mask_and_positions(attention_mask, position_ids, offset):
         and attention_mask.ndim == 2
         and bool(attention_mask.all())
     ):
-        if not bool(continuous.all()):
-            # The generic LFM3 mask recognizes a restart from position IDs. A
-            # cross-document draft state must be its own empty document, and
-            # the next valid state must restart again rather than attend it.
-            previous = torch.cat([positions[:, :1] - 1, positions[:, :-1]], dim=1)
-            positions = torch.where(continuous, positions, previous)
-        return None, positions
+        # A state that crosses a document boundary stays at the end of its source document, where no
+        # later query of that document attends it; its targets are ignored by _shifted_targets.
+        return None, position_ids[:, : position_ids.shape[1] - offset]
     if not torch.is_tensor(attention_mask):
         raise TypeError("MTP training expects attention_mask to be a tensor")
     if attention_mask.ndim == 2:
@@ -233,17 +237,21 @@ class Lfm3MTPMixin:
                 dim=-1,
             )
         )
-        mask, pos = _mtp_mask_and_positions(attention_mask, position_ids, depth)
-        masks = create_masks_by_layer_type(self._mtp_text_config(), z, mask, None, pos)
+        mask, document_positions = _mtp_mask_and_positions(
+            attention_mask, position_ids, depth
+        )
+        masks = create_masks_by_layer_type(
+            self._mtp_text_config(), z, mask, None, document_positions
+        )
         pe = self._mtp_text_model().rotary_emb(
-            z, position_ids=pos, layer_type=m.layer_type
+            z, position_ids=position_ids[:, depth:], layer_type=m.layer_type
         )
         for layer in m.layers:
             z = layer(
                 z,
                 attention_mask=masks[m.layer_type],
                 position_embeddings=pe,
-                position_ids=pos,
+                position_ids=document_positions,
                 past_key_values=None,
             )
         return m.norm(z)

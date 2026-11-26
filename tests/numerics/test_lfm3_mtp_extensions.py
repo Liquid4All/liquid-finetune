@@ -2,6 +2,7 @@
 
 import json
 import shutil
+import sys
 
 import pytest
 import torch
@@ -417,3 +418,29 @@ def test_invalid_draft_counts_are_rejected(tiny_lfm3, tmp_path, count):
         )
     with pytest.raises(SystemExit):  # argparse: must be between 1 and 5
         main([str(tiny_lfm3), str(tmp_path / "cli"), "--num-draft-tokens", str(count)])
+
+
+@pytest.mark.parametrize("offset", [1, 2, 3, 4, 5])
+def test_packed_draft_states_give_flash_attention_valid_document_boundaries(
+    tiny_lfm3, tmp_path, offset
+):
+    """FlashAttention-2 reads document starts off ``position_ids``; boundaries that do not start at 0
+    make its kernel read outside the packed row (a GPU memory fault, invisible to the CPU attention)."""
+    try:
+        from transformers.modeling_flash_attention_utils import (
+            prepare_fa_kwargs_from_position_ids,
+        )
+    except ImportError:
+        pytest.skip("Transformers has no FlashAttention-2 position-id helper")
+    model = _frozen_model(tiny_lfm3, tmp_path)
+    helper = sys.modules[type(model).__module__]._mtp_mask_and_positions
+    lengths = (9, 7, 5)
+    positions = torch.cat([torch.arange(n) for n in lengths])[None]
+    _, document_positions = helper(None, positions, offset)
+    (cu_seqlens, _), (longest, _) = prepare_fa_kwargs_from_position_ids(
+        document_positions
+    )
+    states = positions.shape[1] - offset
+    starts = [sum(lengths[:i]) for i in range(len(lengths))]
+    assert cu_seqlens.tolist() == [s for s in starts if s < states] + [states]
+    assert int(longest) <= states
