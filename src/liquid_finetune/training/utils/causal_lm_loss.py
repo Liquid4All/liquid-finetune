@@ -185,6 +185,13 @@ def install_memory_efficient_causal_lm_loss(model: nn.Module) -> None:
         os.getenv("LIQUID_CAUSAL_LM_LOSS_CHUNK_SIZE", DEFAULT_CAUSAL_LM_LOSS_CHUNK_SIZE)
     )
 
+    if int(getattr(getattr(model, "config", None), "mtp_num_hidden_layers", 0) or 0):
+        # MTP models (e.g. liquid-prepare-mtp checkpoints) compute the main and the
+        # MTP cross-entropies themselves, chunked over supervised positions only.
+        # Replacing their forward would silently drop the MTP loss.
+        logger.info("MTP model: keeping its own forward and loss")
+        return
+
     model.loss_function = partial(chunked_causal_lm_loss, chunk_size=chunk_size)
 
     if not hasattr(model, "model") or not hasattr(model, "lm_head"):

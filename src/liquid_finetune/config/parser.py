@@ -595,6 +595,7 @@ def materialize_job_config(job_config: JobConfig) -> ResolvedJobConfig:
         grpo_rollout=grpo_rollout_cfg,
         async_eval=async_eval_cfg,
         config_dir=str(config_dir),
+        mtp=job_config.mtp.model_dump() if job_config.mtp else None,
     )
 
 

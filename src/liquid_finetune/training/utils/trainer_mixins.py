@@ -115,10 +115,16 @@ class CausalLMLossTokenCountMixin:
     Passing shifted labels through to the upstream helper preserves its
     distributed gathering and device handling while keeping the denominator
     aligned with the scored tokens.
+
+    Later Transformers versions shift the labels for counting themselves
+    (``Trainer._loss_shifts_labels``); shifting here as well would count
+    ``labels[..., 2:]`` and under-count every row, so they are left alone.
     """
 
     def _get_num_items_in_batch(self, batch_samples, device):
-        if not batch_samples or "labels" not in batch_samples[0]:
+        if hasattr(self, "_loss_shifts_labels") or (
+            not batch_samples or "labels" not in batch_samples[0]
+        ):
             return super()._get_num_items_in_batch(batch_samples, device)
 
         shifted_samples = []

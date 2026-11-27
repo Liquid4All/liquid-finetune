@@ -268,6 +268,31 @@ class EvalRunConfig(BaseModel):
         return self.checkpoint or self.model_name or ""
 
 
+class MTPConfig(BaseModel):
+    """Multi-token-prediction draft modules for LFM3 / LFM3-VL speculative decoding.
+
+    The base checkpoint is turned into an MTP start point before training:
+    ``num_draft_tokens`` sequential draft modules, module d drafting the token d
+    positions after the verifier's next token. The verifier is the model itself.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    num_draft_tokens: int = Field(ge=1, le=5)
+    objective: Literal["hard", "soft"] = "hard"
+    train_backbone: bool = False
+    loss_weight: float = Field(default=0.3, gt=0)
+    init_from_layer: int | None = None
+
+    @model_validator(mode="after")
+    def _validate_mtp(self) -> MTPConfig:
+        if self.train_backbone and self.num_draft_tokens != 1:
+            raise ValueError(
+                "mtp.train_backbone (joint training) supports num_draft_tokens=1 only"
+            )
+        return self
+
+
 class RayConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -312,6 +337,7 @@ class JobConfig(BaseModel):
         serialization_alias="evals",
     )
     model_overrides: dict[str, Any] | None = Field(default=None, alias="model_config")
+    mtp: MTPConfig | None = None
     ray: RayConfig | None = None
     slurm: SlurmConfig | None = None
     modal: ModalConfig | None = None
@@ -345,6 +371,30 @@ class JobConfig(BaseModel):
             and self.peft_config.use_peft is not False
         ):
             raise ValueError("PEFT is not yet supported for retrieval training")
+        if self.mtp is not None:
+            if self.training_type not in ("sft", "vlm_sft"):
+                raise ValueError(
+                    f"mtp: draft modules train with sft or vlm_sft, got {self.training_type!r}"
+                )
+            if self.peft_config is not None and self.peft_config.use_peft is not False:
+                raise ValueError("mtp: draft modules train in full; disable PEFT")
+            training_extras = self.training_config.model_dump(exclude_none=True)
+            if training_extras.get("adapter_path"):
+                raise ValueError(
+                    "mtp: draft modules train in full; training_config.adapter_path is not supported"
+                )
+            if training_extras.get("qat"):
+                raise ValueError(
+                    "mtp: quantization-aware training is not supported; liquid-eval-mtp and the "
+                    "exported checkpoint would not reproduce the fake-quantized forward"
+                )
+            if self.kuberay is not None and not (self.kuberay.model_extra or {}).get(
+                "output_pvc"
+            ):
+                raise ValueError(
+                    "mtp: the start point is written to the output directory, so KubeRay jobs "
+                    "need kuberay.output_pvc for the workers to read it"
+                )
         if self.training_type in retrieval_types:
             train_config = self.training_config
             expected_base = (
@@ -465,6 +515,7 @@ class ResolvedJobConfig:
     grpo_rollout: dict[str, Any] | None
     async_eval: dict[str, Any] | None
     config_dir: str | None = None
+    mtp: dict[str, Any] | None = None
 
     def to_dict(self, dataset: tuple[Dataset, Dataset] | None = None) -> dict[str, Any]:
         dataset_to_use = dataset if dataset is not None else self.dataset

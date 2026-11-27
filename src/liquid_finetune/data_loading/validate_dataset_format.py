@@ -550,6 +550,23 @@ def normalize_columns(dataset_type: str, image_root: str | None = None):
             if isinstance(message, dict) and isinstance(message.get("content"), str):
                 message["content"] = [{"type": "text", "text": message["content"]}]
 
+        # === 3b. Parse content parts that were stored as JSON strings ===
+        # ``datasets`` keeps parts with different keys (image vs. text) in one JSON
+        # column and hands them over as strings; the validator needs dicts. Anything
+        # that is not a JSON object stays as it is and is rejected there.
+        def parse_part(part):
+            if not isinstance(part, str):
+                return part
+            try:
+                parsed = json.loads(part)
+            except ValueError:
+                return part
+            return parsed if isinstance(parsed, dict) else part
+
+        for message in messages:
+            if isinstance(message, dict) and isinstance(message.get("content"), list):
+                message["content"] = [parse_part(part) for part in message["content"]]
+
         # === 4. Prepend image_root to relative image paths ===
         if image_root:
             root = pathlib.PurePosixPath(image_root)

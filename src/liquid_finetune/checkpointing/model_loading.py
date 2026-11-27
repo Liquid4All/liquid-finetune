@@ -306,13 +306,22 @@ def load_vlm_model(
     min_image_tokens: int | None = None,
     max_image_tokens: int | None = None,
     do_image_splitting: bool = True,
+    model_config: dict | None = None,
 ) -> tuple[AutoModelForImageTextToText, AutoProcessor]:
-    """Load a VLM model from the Hugging Face Hub or from a local path."""
+    """Load a VLM model from the Hugging Face Hub or from a local path.
+
+    ``model_config`` overrides top-level config keys before loading, as for
+    text models (e.g. ``mtp_soft`` on an MTP checkpoint).
+    """
 
     model_id = _resolve_model_id(model_name)
     logger.info(f"Loading VLM: {model_id}")
 
     config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+    for key, value in (model_config or {}).items():
+        setattr(config, key, value)
+    if model_config:
+        logger.info(f"Applied model config overrides: {list(model_config)}")
     model_type = getattr(config, "model_type", "")
     processor_kwargs = {"trust_remote_code": True}
     if model_type == "lfm3_vl":

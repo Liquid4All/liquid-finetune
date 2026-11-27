@@ -200,6 +200,10 @@ def run_config(config_path, *, output_path: str | pathlib.Path | None = None):
         if parsed_job is None:
             parsed_job = parse_job_config(config_path_arg)
         job_config = materialize_job_config(parsed_job)
+        if job_config.mtp:
+            from liquid_finetune.models.lfm3_mtp.job_setup import prepare_mtp_job
+
+            job_config = prepare_mtp_job(job_config)
         print_job_config_summary(job_config)
 
         if isinstance(job_config.dataset, DatasetLoader):
